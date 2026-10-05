@@ -1,14 +1,18 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.services.market_data import connection_manager
 
 router = APIRouter()
 
-@router.websocket("/ws/market-data")
-async def websocket_endpoint(websocket: WebSocket):
-    await connection_manager.connect(websocket)
+
+@router.websocket("/ws/terminal")
+async def terminal_ws(websocket: WebSocket):
+    hub = websocket.app.state.hub
+    engine = websocket.app.state.engine
+    await hub.connect(websocket)
     try:
+        await websocket.send_json({"type": "snapshot", "data": engine.snapshot()})
         while True:
-            data = await websocket.receive_text()
-            # Handle incoming messages (e.g. subscribe/unsubscribe)
+            await websocket.receive_text()  # client pings; commands go over REST
     except WebSocketDisconnect:
-        connection_manager.disconnect(websocket)
+        pass
+    finally:
+        hub.disconnect(websocket)

@@ -1,8 +1,16 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Activity, TrendingUp, TrendingDown, RefreshCw } from "lucide-react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import { Activity, TrendingDown, RefreshCw } from "lucide-react";
 
 type Tick = {
   symbol: string;
@@ -46,10 +54,10 @@ export default function Dashboard() {
       setChartData((prev) => {
         const newData = [...prev];
         const lastEntry = newData[newData.length - 1];
-        
+
         // Update existing time entry if it's in the same second, else create new
         if (lastEntry && lastEntry.time === currentTime) {
-          lastEntry[data.symbol as keyof ChartData] = data.ltp as any;
+          lastEntry[data.symbol as keyof ChartData] = data.ltp as unknown;
         } else {
           newData.push({
             time: currentTime,
@@ -57,7 +65,7 @@ export default function Dashboard() {
             BANKNIFTY: data.symbol === "BANKNIFTY" ? data.ltp : lastEntry?.BANKNIFTY || null,
           });
         }
-        
+
         // Keep last 30 data points for smooth chart
         if (newData.length > 30) {
           newData.shift();
@@ -86,7 +94,6 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
-        
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
@@ -95,8 +102,14 @@ export default function Dashboard() {
           </h1>
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-gray-600">Status:</span>
-            <div className={`flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium ${isConnected ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-              {isConnected ? <RefreshCw className="h-4 w-4 animate-spin" /> : <TrendingDown className="h-4 w-4" />}
+            <div
+              className={`flex items-center gap-1 px-3 py-1 rounded-full text-sm font-medium ${isConnected ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}
+            >
+              {isConnected ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : (
+                <TrendingDown className="h-4 w-4" />
+              )}
               {isConnected ? "Live" : "Disconnected"}
             </div>
           </div>
@@ -107,7 +120,10 @@ export default function Dashboard() {
           {["NIFTY", "BANKNIFTY"].map((symbol) => {
             const tick = ticks[symbol];
             return (
-              <div key={symbol} className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+              <div
+                key={symbol}
+                className="bg-white rounded-xl shadow-sm border border-gray-100 p-6"
+              >
                 <h2 className="text-xl font-semibold text-gray-800 mb-4">{symbol}</h2>
                 {tick ? (
                   <div className="space-y-4">
@@ -117,7 +133,7 @@ export default function Dashboard() {
                       </span>
                       <span className="text-sm text-gray-500 font-medium">LTP</span>
                     </div>
-                    
+
                     <div className="grid grid-cols-3 gap-4 pt-4 border-t border-gray-50">
                       <div>
                         <p className="text-sm text-gray-500">High</p>
@@ -129,7 +145,9 @@ export default function Dashboard() {
                       </div>
                       <div>
                         <p className="text-sm text-gray-500">Volume</p>
-                        <p className="font-semibold text-gray-700">{tick.volume.toLocaleString()}</p>
+                        <p className="font-semibold text-gray-700">
+                          {tick.volume.toLocaleString()}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -150,11 +168,24 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                <XAxis dataKey="time" tick={{ fontSize: 12, fill: '#6b7280' }} minTickGap={30} />
-                <YAxis yAxisId="left" domain={['auto', 'auto']} tick={{ fontSize: 12, fill: '#6b7280' }} />
-                <YAxis yAxisId="right" orientation="right" domain={['auto', 'auto']} tick={{ fontSize: 12, fill: '#6b7280' }} />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                <XAxis dataKey="time" tick={{ fontSize: 12, fill: "#6b7280" }} minTickGap={30} />
+                <YAxis
+                  yAxisId="left"
+                  domain={["auto", "auto"]}
+                  tick={{ fontSize: 12, fill: "#6b7280" }}
+                />
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  domain={["auto", "auto"]}
+                  tick={{ fontSize: 12, fill: "#6b7280" }}
+                />
+                <Tooltip
+                  contentStyle={{
+                    borderRadius: "8px",
+                    border: "none",
+                    boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
+                  }}
                 />
                 <Line
                   yAxisId="left"
@@ -178,7 +209,6 @@ export default function Dashboard() {
             </ResponsiveContainer>
           </div>
         </div>
-
       </div>
     </div>
   );

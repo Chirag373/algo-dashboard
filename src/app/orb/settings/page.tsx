@@ -24,23 +24,87 @@ export default function OrbSettings() {
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       <h2 className="text-2xl font-semibold text-white tracking-wide">Strategy Settings</h2>
-      
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Row 1 */}
-        <SettingCard label="initial sl percent" name="initialSlPercent" value={settings.initialSlPercent} onChange={handleChange} type="number" step="0.1" />
-        <SettingCard label="tsl lock percent" name="tslLockPercent" value={settings.tslLockPercent} onChange={handleChange} type="number" step="0.1" />
-        <SettingCard label="tsl trail step" name="tslTrailStep" value={settings.tslTrailStep} onChange={handleChange} type="number" step="0.1" />
-        <SettingCard label="tsl trail amount" name="tslTrailAmount" value={settings.tslTrailAmount} onChange={handleChange} type="number" step="0.1" />
-        
+        <SettingCard
+          label="initial sl percent"
+          name="initialSlPercent"
+          value={settings.initialSlPercent}
+          onChange={handleChange}
+          type="number"
+          step="0.1"
+        />
+        <SettingCard
+          label="tsl lock percent"
+          name="tslLockPercent"
+          value={settings.tslLockPercent}
+          onChange={handleChange}
+          type="number"
+          step="0.1"
+        />
+        <SettingCard
+          label="tsl trail step"
+          name="tslTrailStep"
+          value={settings.tslTrailStep}
+          onChange={handleChange}
+          type="number"
+          step="0.1"
+        />
+        <SettingCard
+          label="tsl trail amount"
+          name="tslTrailAmount"
+          value={settings.tslTrailAmount}
+          onChange={handleChange}
+          type="number"
+          step="0.1"
+        />
+
         {/* Row 2 */}
-        <SettingCard label="per trade amount" name="perTradeAmount" value={settings.perTradeAmount} onChange={handleChange} type="number" />
-        <SettingCard label="total capital" name="totalCapital" value={settings.totalCapital} onChange={handleChange} type="number" />
-        <SettingCard label="market close exit time" name="marketCloseExitTime" value={settings.marketCloseExitTime} onChange={handleChange} type="time" />
-        <SettingCard label="strategy active" name="strategyActive" value={settings.strategyActive} onChange={handleChange} type="number" />
-        
+        <SettingCard
+          label="per trade amount"
+          name="perTradeAmount"
+          value={settings.perTradeAmount}
+          onChange={handleChange}
+          type="number"
+        />
+        <SettingCard
+          label="total capital"
+          name="totalCapital"
+          value={settings.totalCapital}
+          onChange={handleChange}
+          type="number"
+        />
+        <SettingCard
+          label="market close exit time"
+          name="marketCloseExitTime"
+          value={settings.marketCloseExitTime}
+          onChange={handleChange}
+          type="time"
+        />
+        <SettingCard
+          label="strategy active"
+          name="strategyActive"
+          value={settings.strategyActive}
+          onChange={handleChange}
+          type="number"
+        />
+
         {/* Row 3 */}
-        <SettingCard label="max trades per stock" name="maxTradesPerStock" value={settings.maxTradesPerStock} onChange={handleChange} type="number" />
-        <SettingCard label="range candle count" name="rangeCandleCount" value={settings.rangeCandleCount} onChange={handleChange} type="number" />
+        <SettingCard
+          label="max trades per stock"
+          name="maxTradesPerStock"
+          value={settings.maxTradesPerStock}
+          onChange={handleChange}
+          type="number"
+        />
+        <SettingCard
+          label="range candle count"
+          name="rangeCandleCount"
+          value={settings.rangeCandleCount}
+          onChange={handleChange}
+          type="number"
+        />
       </div>
 
       <div className="pt-8 flex justify-center">
@@ -52,10 +116,12 @@ export default function OrbSettings() {
   );
 }
 
-function SettingCard({ label, name, value, onChange, type = "text", step }: any) {
+function SettingCard({ label, name, value, onChange, type = "text", step }: unknown) {
   return (
     <div className="bg-orb-panel border border-gray-800 rounded-xl p-4 flex flex-col gap-2 shadow-sm">
-      <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold">{label}</label>
+      <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold">
+        {label}
+      </label>
       <input
         type={type}
         name={name}

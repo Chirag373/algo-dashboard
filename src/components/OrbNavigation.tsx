@@ -20,9 +20,11 @@ export function OrbHeader() {
         <h1 className="text-xl font-bold text-white tracking-wider flex items-center gap-2">
           The Algo <span className="text-orb-accent">Trader</span>
         </h1>
-        <span className="text-[10px] text-gray-400 tracking-widest uppercase">Open Range Breakout</span>
+        <span className="text-[10px] text-gray-400 tracking-widest uppercase">
+          Open Range Breakout
+        </span>
       </div>
-      
+
       <div className="flex items-center gap-6">
         <div className="font-mono text-gray-300 text-lg mono-nums">{time}</div>
         <div className="flex items-center gap-2 bg-green-900/30 text-green-400 px-3 py-1.5 rounded-full border border-green-800/50">
@@ -36,7 +38,7 @@ export function OrbHeader() {
 
 export function OrbNav() {
   const pathname = usePathname();
-  
+
   const tabs = [
     { name: "Dashboard", href: "/orb/dashboard" },
     { name: "Open Trades", href: "/orb/open-trades" },
@@ -54,8 +56,8 @@ export function OrbNav() {
             key={tab.name}
             href={tab.href}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
-              isActive 
-                ? "bg-blue-900/40 text-blue-400" 
+              isActive
+                ? "bg-blue-900/40 text-blue-400"
                 : "text-gray-400 hover:text-gray-200 hover:bg-gray-800/50"
             }`}
           >

@@ -25,8 +25,14 @@ export default function FinbabaAnalytics() {
               <option>B5 — BankNifty</option>
             </optgroup>
           </select>
-          <input type="date" className="bg-[#1a1a1a] text-gray-200 px-3 py-2 rounded border border-gray-700 outline-none focus:border-green-500 text-sm" />
-          <input type="date" className="bg-[#1a1a1a] text-gray-200 px-3 py-2 rounded border border-gray-700 outline-none focus:border-green-500 text-sm" />
+          <input
+            type="date"
+            className="bg-[#1a1a1a] text-gray-200 px-3 py-2 rounded border border-gray-700 outline-none focus:border-green-500 text-sm"
+          />
+          <input
+            type="date"
+            className="bg-[#1a1a1a] text-gray-200 px-3 py-2 rounded border border-gray-700 outline-none focus:border-green-500 text-sm"
+          />
           <button className="border border-green-500 text-green-500 hover:bg-green-500/10 px-6 py-2 rounded font-medium text-sm transition-colors">
             Apply Filter
           </button>
@@ -51,8 +57,13 @@ export default function FinbabaAnalytics() {
           { label: "ACC1 Total", value: "+₹22,512.50", color: "text-green-500" },
           { label: "ACC2 Total", value: "+₹22,512.50", color: "text-green-500" },
         ].map((stat, i) => (
-          <div key={i} className="bg-fin-panel border border-gray-800 rounded-lg p-4 flex flex-col justify-center shadow-sm">
-            <span className="text-[11px] text-gray-400 font-medium uppercase tracking-wider mb-2">{stat.label}</span>
+          <div
+            key={i}
+            className="bg-fin-panel border border-gray-800 rounded-lg p-4 flex flex-col justify-center shadow-sm"
+          >
+            <span className="text-[11px] text-gray-400 font-medium uppercase tracking-wider mb-2">
+              {stat.label}
+            </span>
             <span className={`text-xl font-bold mono-nums ${stat.color}`}>{stat.value}</span>
           </div>
         ))}
@@ -86,23 +97,41 @@ export default function FinbabaAnalytics() {
             </thead>
             <tbody className="divide-y divide-gray-800/50">
               <tr className="hover:bg-fin-panel-hover transition-colors group">
-                <td className="px-3 py-2"><span className="bg-blue-900/50 text-blue-300 font-bold px-1.5 py-0.5 rounded">C2</span></td>
+                <td className="px-3 py-2">
+                  <span className="bg-blue-900/50 text-blue-300 font-bold px-1.5 py-0.5 rounded">
+                    C2
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-gray-300 mono-nums">2023-10-27</td>
                 <td className="px-3 py-2 text-gray-300 mono-nums">09:15</td>
                 <td className="px-3 py-2 text-gray-300 mono-nums">19500.00</td>
                 <td className="px-3 py-2 text-right mono-nums">19510.50</td>
                 <td className="px-3 py-2 text-right mono-nums">195.10</td>
                 <td className="px-3 py-2 text-right mono-nums text-gray-500">19450.00</td>
-                <td className="px-3 py-2 text-right mono-nums text-amber-500 font-bold bg-amber-900/10">19480.00</td>
-                <td className="px-3 py-2 text-center"><span className="bg-amber-500/20 text-amber-500 font-bold px-1.5 py-0.5 rounded">L2</span></td>
+                <td className="px-3 py-2 text-right mono-nums text-amber-500 font-bold bg-amber-900/10">
+                  19480.00
+                </td>
+                <td className="px-3 py-2 text-center">
+                  <span className="bg-amber-500/20 text-amber-500 font-bold px-1.5 py-0.5 rounded">
+                    L2
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-right mono-nums">19550.00</td>
                 <td className="px-3 py-2 text-right mono-nums">195.50</td>
                 <td className="px-3 py-2 text-right mono-nums text-gray-400">10:45</td>
-                <td className="px-3 py-2 text-right mono-nums font-medium text-green-500">+39.50</td>
-                <td className="px-3 py-2 text-right mono-nums font-medium text-green-500">+₹1,975</td>
-                <td className="px-3 py-2 text-right mono-nums font-medium text-green-500">+₹1,975</td>
+                <td className="px-3 py-2 text-right mono-nums font-medium text-green-500">
+                  +39.50
+                </td>
+                <td className="px-3 py-2 text-right mono-nums font-medium text-green-500">
+                  +₹1,975
+                </td>
+                <td className="px-3 py-2 text-right mono-nums font-medium text-green-500">
+                  +₹1,975
+                </td>
                 <td className="px-3 py-2 text-right mono-nums text-gray-500">19420.00</td>
-                <td className="px-3 py-2 text-center"><span className="text-green-500 font-bold">BULL</span></td>
+                <td className="px-3 py-2 text-center">
+                  <span className="text-green-500 font-bold">BULL</span>
+                </td>
                 <td className="px-3 py-2 text-right mono-nums text-gray-500">19350.00</td>
               </tr>
             </tbody>
