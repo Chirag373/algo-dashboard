@@ -14,6 +14,14 @@ interface LightweightChartProps {
   symbol: string;
 }
 
+interface CandleBar {
+  time: Time;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
 export function LightweightChart({ symbol }: LightweightChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -54,15 +62,15 @@ export function LightweightChart({ symbol }: LightweightChartProps) {
     seriesRef.current = series;
 
     // Fetch history
-    api(`/history/${symbol}`)
-      .then((res) => {
-        if (res.ok && res.data.length > 0) {
-          const formatted = res.data.map((b: unknown) => ({
-            time: b.time as Time,
-            open: b.open,
-            high: b.high,
-            low: b.low,
-            close: b.close,
+    api<CandleBar[]>("GET", `/history/${symbol}`)
+      .then((data) => {
+        if (data.length > 0) {
+          const formatted = data.map((bar) => ({
+            time: bar.time,
+            open: bar.open,
+            high: bar.high,
+            low: bar.low,
+            close: bar.close,
           }));
           series.setData(formatted);
           if (formatted.length > 0) {
@@ -104,7 +112,9 @@ export function LightweightChart({ symbol }: LightweightChartProps) {
     // OR we can just use the latest price to update the LAST bar if time matches.
     // Actually, to make it look active, let's just update the close price of the last bar.
 
-    const lastData = seriesRef.current.dataByIndex(seriesRef.current.data().length - 1) as unknown;
+    const lastData = seriesRef.current.dataByIndex(
+      seriesRef.current.data().length - 1
+    ) as CandleBar | null;
     if (lastData) {
       // We just blindly update the last bar with the LTP to show live tick movement
       seriesRef.current.update({

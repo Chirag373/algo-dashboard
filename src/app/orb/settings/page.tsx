@@ -116,7 +116,16 @@ export default function OrbSettings() {
   );
 }
 
-function SettingCard({ label, name, value, onChange, type = "text", step }: unknown) {
+type SettingCardProps = {
+  label: string;
+  name: string;
+  value: string | number;
+  onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  type?: string;
+  step?: string;
+};
+
+function SettingCard({ label, name, value, onChange, type = "text", step }: SettingCardProps) {
   return (
     <div className="bg-orb-panel border border-gray-800 rounded-xl p-4 flex flex-col gap-2 shadow-sm">
       <label className="text-xs text-gray-400 uppercase tracking-wider font-semibold">

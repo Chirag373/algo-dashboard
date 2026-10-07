@@ -12,6 +12,7 @@ export default function Analytics() {
 
   const days = useMemo(() => {
     if (sel === "all") {
+      if (t.strategies.length === 0) return [];
       const parts = t.strategies.map((_, i) => syntheticHistory(100 + i, 60));
       return parts[0].map((d, i) => ({
         ...d,

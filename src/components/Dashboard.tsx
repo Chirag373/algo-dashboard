@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import {
   LineChart,
   Line,
@@ -57,7 +57,8 @@ export default function Dashboard() {
 
         // Update existing time entry if it's in the same second, else create new
         if (lastEntry && lastEntry.time === currentTime) {
-          lastEntry[data.symbol as keyof ChartData] = data.ltp as unknown;
+          const symbolKey = data.symbol as "NIFTY" | "BANKNIFTY";
+          lastEntry[symbolKey] = data.ltp;
         } else {
           newData.push({
             time: currentTime,
