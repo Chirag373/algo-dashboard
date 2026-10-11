@@ -12,6 +12,7 @@ import { api } from "@/lib/terminal/api";
 
 interface LightweightChartProps {
   symbol: string;
+  height?: number;
 }
 
 interface CandleBar {
@@ -22,7 +23,7 @@ interface CandleBar {
   close: number;
 }
 
-export function LightweightChart({ symbol }: LightweightChartProps) {
+export function LightweightChart({ symbol, height }: LightweightChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -36,18 +37,21 @@ export function LightweightChart({ symbol }: LightweightChartProps) {
     const chart = createChart(chartContainerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "#94a3b8", // slate-400
+        textColor: "#64748b", // slate-500
+        fontSize: 11,
       },
       grid: {
-        vertLines: { color: "#1e293b" }, // slate-800
-        horzLines: { color: "#1e293b" },
+        vertLines: { color: "#f1f5f9" }, // slate-100
+        horzLines: { color: "#f1f5f9" },
       },
+      rightPriceScale: { borderColor: "#e2e8f0" },
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
+        borderColor: "#e2e8f0",
       },
       width: chartContainerRef.current.clientWidth,
-      height: 400,
+      height: height ?? chartContainerRef.current.clientHeight,
     });
 
     chartRef.current = chart;
@@ -74,7 +78,7 @@ export function LightweightChart({ symbol }: LightweightChartProps) {
           }));
           series.setData(formatted);
           if (formatted.length > 0) {
-            lastTimeRef.current = formatted[formatted.length - 1].time;
+            lastTimeRef.current = formatted[formatted.length - 1].time as number;
           }
         }
       })
@@ -82,17 +86,21 @@ export function LightweightChart({ symbol }: LightweightChartProps) {
 
     const handleResize = () => {
       if (chartContainerRef.current) {
-        chart.applyOptions({ width: chartContainerRef.current.clientWidth });
+        chart.applyOptions({
+          width: chartContainerRef.current.clientWidth,
+          height: height ?? chartContainerRef.current.clientHeight,
+        });
       }
     };
 
-    window.addEventListener("resize", handleResize);
+    const ro = new ResizeObserver(handleResize);
+    ro.observe(chartContainerRef.current);
 
     return () => {
-      window.removeEventListener("resize", handleResize);
+      ro.disconnect();
       chart.remove();
     };
-  }, [symbol]);
+  }, [symbol, height]);
 
   // Real-time updates based on price stream
   useEffect(() => {
@@ -127,5 +135,11 @@ export function LightweightChart({ symbol }: LightweightChartProps) {
     }
   }, [prices, symbol]);
 
-  return <div className="w-full h-[400px]" ref={chartContainerRef} />;
+  return (
+    <div
+      className="w-full h-full"
+      style={height ? { height } : undefined}
+      ref={chartContainerRef}
+    />
+  );
 }

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useTerminal } from "@/lib/terminal/store";
 import { syntheticHistory } from "@/lib/terminal/analytics";
 import PerformanceView from "@/components/terminal/PerformanceView";
-import { Panel, inputCls } from "@/components/terminal/ui";
+import { Select } from "@/components/terminal";
 
 export default function Analytics() {
   const t = useTerminal();
@@ -26,32 +26,26 @@ export default function Analytics() {
   }, [sel, t.strategies]);
 
   return (
-    <div className="max-w-[1600px] mx-auto space-y-4">
+    <div className="max-w-[1600px] w-full mx-auto flex flex-col space-y-6 text-slate-900 pb-8">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-white">Analytics</h1>
+          <h1 className="text-xl font-bold text-slate-900">Analytics</h1>
           <p className="text-sm text-slate-500">Performance over the last 60 trading days.</p>
         </div>
-        <select
-          className={`${inputCls} !w-64`}
+        <Select
+          className="w-64"
           value={sel}
-          onChange={(e) => setSel(e.target.value)}
-          aria-label="Strategy filter"
-        >
-          <option value="all">All strategies</option>
-          {t.strategies.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-            </option>
-          ))}
-        </select>
+          onChange={setSel}
+          options={[
+            { value: "all", label: "All strategies" },
+            ...t.strategies.map((s) => ({ value: s.id, label: s.name })),
+          ]}
+        />
       </div>
 
-      <Panel>
-        <p className="px-4 py-2 text-xs text-amber-300 bg-amber-950/40 rounded-lg">
-          Demo data: these figures are synthetic until the backend records real trades.
-        </p>
-      </Panel>
+      <p className="px-4 py-3 text-[13px] font-medium text-amber-800 bg-amber-50 border border-amber-200/60 rounded-xl">
+        Demo data: these figures are synthetic until the backend records real trades.
+      </p>
 
       <PerformanceView days={days} capital={t.risk.totalCapital} />
     </div>

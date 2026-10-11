@@ -8,147 +8,68 @@ import {
   FlaskConical,
   LayoutDashboard,
   ListChecks,
-  Octagon,
   ShieldAlert,
-  Wifi,
+  Settings,
+  Bell,
   WifiOff,
   X,
-  Zap,
+  TrendingUp,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TerminalProvider, useTerminal } from "@/lib/terminal/store";
-import { pnlColor, signed } from "@/lib/terminal/format";
 
 const NAV = [
-  { href: "/terminal", label: "Overview", icon: LayoutDashboard },
+  { href: "/terminal", label: "Dashboard", icon: LayoutDashboard },
   { href: "/terminal/trading", label: "Trading", icon: Activity },
   { href: "/terminal/strategies", label: "Strategies", icon: ListChecks },
   { href: "/terminal/backtest", label: "Backtest", icon: FlaskConical },
   { href: "/terminal/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/terminal/risk", label: "Risk", icon: ShieldAlert },
+  { href: "/terminal/settings", label: "Settings", icon: Settings },
 ];
 
 function CommandBar() {
   const t = useTerminal();
-  const [confirmKill, setConfirmKill] = useState(false);
-  const running = t.strategies.filter((s) => s.status === "running").length;
 
   return (
-    <header className="h-14 shrink-0 border-b border-slate-800 bg-[#0a0e17] flex items-center gap-4 px-4 sticky top-0 z-40">
-      <div className="flex items-center gap-2 font-bold tracking-wide text-white">
-        <Zap className="w-5 h-5 text-blue-500" />
-        <span className="hidden sm:inline">Algo Terminal</span>
-      </div>
-
-      <div
-        role="group"
-        aria-label="Trading mode"
-        className="flex rounded-md border border-slate-700 overflow-hidden text-xs font-bold"
-      >
-        <button
-          onClick={() => t.requestMode("paper")}
-          aria-pressed={t.mode === "paper"}
-          className={`px-3 py-1.5 ${t.mode === "paper" ? "bg-amber-500 text-black" : "text-slate-400 hover:bg-slate-800"}`}
+    <header className="h-14 shrink-0 bg-slate-900 text-white flex items-center justify-between px-6 z-40 border-b border-slate-800">
+      <div className="flex items-center gap-8">
+        <Link
+          href="/terminal"
+          className="flex items-center gap-2 font-bold text-[17px] tracking-tight"
         >
-          PAPER
-        </button>
-        <button
-          onClick={() => t.requestMode("live")}
-          aria-pressed={t.mode === "live"}
-          title={t.liveEnabled ? "Switch to live trading" : "Live trading is disabled"}
-          className={`px-3 py-1.5 ${t.mode === "live" ? "bg-red-600 text-white" : "text-slate-400 hover:bg-slate-800"}`}
-        >
-          LIVE
-        </button>
-      </div>
+          <TrendingUp className="w-5 h-5 text-blue-500" strokeWidth={3} />
+          <span>
+            Algo<span className="text-slate-300 font-normal">Terminal</span>
+          </span>
+        </Link>
 
-      <div className="hidden md:flex items-center gap-1.5 text-xs text-slate-400">
-        {t.feedConnected ? (
-          <Wifi className="w-4 h-4 text-emerald-400" />
-        ) : (
-          <WifiOff className="w-4 h-4 text-rose-400" />
-        )}
-        <span>
-          {t.connection === "online"
-            ? `Feed: ${t.feedKind} · ${t.marketOpen ? "market open" : "market closed"}`
-            : t.connection === "connecting"
-              ? "Connecting..."
-              : "Backend offline"}
-        </span>
-        <span className="mx-2 text-slate-700">|</span>
-        <span>{running} running</span>
-        <span className="mx-2 text-slate-700">|</span>
-        <span className="mono-nums">{t.now} IST</span>
-      </div>
-
-      <div className="ml-auto flex items-center gap-4">
-        <div className="text-right leading-tight">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500">Day P&amp;L</div>
-          <div className={`mono-nums font-bold text-sm ${pnlColor(t.dayPnl)}`}>
-            {signed(t.dayPnl)}
+        <div className="flex items-center gap-5 text-xs font-medium">
+          <div className="flex rounded-full bg-slate-800 p-[3px]">
+            <button
+              onClick={() => t.requestMode("paper")}
+              className={`px-4 py-1 rounded-full transition-colors ${t.mode === "paper" ? "bg-blue-600 text-white shadow-sm" : "text-slate-400 hover:text-white"}`}
+            >
+              PAPER
+            </button>
+            <button
+              onClick={() => t.requestMode("live")}
+              className={`px-4 py-1 rounded-full transition-colors ${t.mode === "live" ? "bg-red-500 text-white" : "text-slate-400 hover:text-white"}`}
+            >
+              LIVE
+            </button>
           </div>
         </div>
-
-        {t.killed ? (
-          <button
-            onClick={t.toggleKill}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold"
-          >
-            <Octagon className="w-4 h-4" /> RELEASE KILL
-          </button>
-        ) : (
-          <button
-            onClick={() => setConfirmKill(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-white text-xs font-bold"
-          >
-            <Octagon className="w-4 h-4" /> KILL
-          </button>
-        )}
       </div>
 
-      {confirmKill && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Confirm kill switch"
-          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
-        >
-          <div className="bg-slate-900 border border-red-900 rounded-xl p-6 max-w-sm w-full space-y-4">
-            <h3 className="text-lg font-bold text-white">Engage kill switch?</h3>
-            <p className="text-sm text-slate-400">
-              This blocks all new orders and stops strategies from entering trades. You can also
-              close every open position now.
-            </p>
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={async () => {
-                  setConfirmKill(false);
-                  await t.squareOffAll();
-                  await t.engageKill();
-                }}
-                className="bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded-md"
-              >
-                Kill + square off all
-              </button>
-              <button
-                onClick={async () => {
-                  setConfirmKill(false);
-                  await t.engageKill();
-                }}
-                className="bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-md"
-              >
-                Kill only (keep positions)
-              </button>
-              <button
-                onClick={() => setConfirmKill(false)}
-                className="text-slate-400 hover:text-white py-1 text-sm"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
+      <div className="flex items-center gap-5">
+        <div className="flex items-center gap-4">
+          <button className="relative text-slate-300 hover:text-white transition-colors">
+            <Bell className="w-4 h-4" />
+            <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-rose-500 rounded-full" />
+          </button>
         </div>
-      )}
+      </div>
     </header>
   );
 }
@@ -157,56 +78,64 @@ function Banner() {
   const t = useTerminal();
   if (t.connection !== "online") {
     return (
-      <div
-        role="alert"
-        className="bg-red-950 text-red-200 text-xs font-semibold px-4 py-1.5 border-b border-red-900"
-      >
+      <div className="bg-rose-50 text-rose-600 text-[13px] font-medium px-6 py-2 border-b border-rose-100 flex items-center gap-2">
+        <WifiOff className="w-4 h-4" />
         {t.connection === "connecting"
-          ? "Connecting to the backend..."
-          : "BACKEND OFFLINE: data is stale and commands will fail. Reconnecting automatically. Start it with: uvicorn app.main:app --port 8001"}
-      </div>
-    );
-  }
-  if (t.killed) {
-    return (
-      <div className="bg-red-950 text-red-200 text-xs font-semibold px-4 py-1.5 border-b border-red-900">
-        KILL SWITCH ENGAGED: new orders are blocked and strategies cannot enter.
-        {t.lossLimitHit && " (Triggered by max daily loss)"}
-      </div>
-    );
-  }
-  if (t.mode === "paper") {
-    return (
-      <div className="bg-amber-950/60 text-amber-300 text-xs px-4 py-1 border-b border-amber-900/50">
-        PAPER MODE: simulated fills, no real money at risk.
+          ? "Connecting to backend..."
+          : "Backend offline. Reconnecting automatically."}
       </div>
     );
   }
   return null;
 }
 
+const TOAST_MS = 5000;
+const NOISE = /^New trading day/;
+
 function Toasts() {
   const t = useTerminal();
-  const recent = t.alerts.slice(0, 3);
-  if (recent.length === 0) return null;
-  const color = {
-    info: "border-blue-700 bg-blue-950",
-    warn: "border-amber-700 bg-amber-950",
-    critical: "border-red-700 bg-red-950",
-  } as const;
+  const seen = useRef<Set<string> | null>(null);
+  const [visible, setVisible] = useState<typeof t.alerts>([]);
+
+  useEffect(() => {
+    // Seed with the existing backlog once connected so old alerts never pop up on load.
+    if (seen.current === null) {
+      if (t.connection !== "online") return;
+      seen.current = new Set(t.alerts.map((a) => a.id));
+      return;
+    }
+    const fresh = t.alerts.filter((a) => !seen.current!.has(a.id));
+    if (fresh.length === 0) return;
+    fresh.forEach((a) => seen.current!.add(a.id));
+    const show = fresh.filter((a) => !NOISE.test(a.message));
+    if (show.length === 0) return;
+    setVisible((v) => [...show, ...v].slice(0, 3));
+    show.forEach((a) =>
+      setTimeout(() => setVisible((v) => v.filter((x) => x.id !== a.id)), TOAST_MS)
+    );
+  }, [t.alerts, t.connection]);
+
+  const dismiss = (id: string) => {
+    setVisible((v) => v.filter((x) => x.id !== id));
+    t.dismissAlert(id);
+  };
+
+  if (visible.length === 0) return null;
   return (
-    <div className="fixed bottom-4 right-4 z-40 space-y-2 w-80" aria-live="polite">
-      {recent.map((a) => (
+    <div className="fixed bottom-6 right-6 z-50 space-y-3 w-80">
+      {visible.map((a) => (
         <div
           key={a.id}
-          className={`border rounded-lg px-3 py-2 text-xs text-slate-100 flex gap-2 shadow-lg ${color[a.level]}`}
+          className="bg-white border border-slate-200 rounded-lg p-3 text-xs text-slate-700 shadow-xl flex gap-3"
         >
           <span className="flex-1">
-            <span className="mono-nums text-slate-400 mr-2">{a.time}</span>
+            <span className="font-semibold text-slate-900 block mb-0.5">
+              {a.level.toUpperCase()}
+            </span>
             {a.message}
           </span>
-          <button onClick={() => t.dismissAlert(a.id)} aria-label="Dismiss alert">
-            <X className="w-3.5 h-3.5 text-slate-400 hover:text-white" />
+          <button onClick={() => dismiss(a.id)}>
+            <X className="w-3.5 h-3.5 text-slate-400 hover:text-slate-600" />
           </button>
         </div>
       ))}
@@ -217,31 +146,32 @@ function Toasts() {
 function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   return (
-    <div className="h-screen flex flex-col bg-[#05080f] text-slate-200">
+    <div className="h-screen flex flex-col bg-slate-50 text-slate-900 font-sans overflow-hidden">
       <CommandBar />
       <Banner />
       <div className="flex flex-1 min-h-0">
-        <nav className="w-14 md:w-52 shrink-0 border-r border-slate-800 bg-[#0a0e17] py-3">
+        <nav className="w-[220px] shrink-0 bg-white border-r border-slate-200 flex flex-col py-4 px-3 space-y-1 overflow-y-auto">
           {NAV.map(({ href, label, icon: Icon }) => {
             const active = href === "/terminal" ? pathname === href : pathname.startsWith(href);
             return (
               <Link
                 key={href}
                 href={href}
-                title={label}
-                className={`flex items-center gap-3 px-4 py-2.5 text-sm font-medium border-l-2 ${
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-semibold transition-all ${
                   active
-                    ? "border-blue-500 bg-slate-800/60 text-white"
-                    : "border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-white"
+                    ? "bg-blue-50 text-blue-600"
+                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
                 }`}
               >
-                <Icon className="w-4 h-4 shrink-0" />
-                <span className="hidden md:inline">{label}</span>
+                <Icon className="w-4 h-4" />
+                {label}
               </Link>
             );
           })}
         </nav>
-        <main className="flex-1 min-w-0 overflow-auto p-4 md:p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto overflow-x-auto min-h-0 p-4 md:p-6 flex flex-col">
+          {children}
+        </main>
       </div>
       <Toasts />
     </div>

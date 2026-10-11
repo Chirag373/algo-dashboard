@@ -5,140 +5,61 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Plus, X } from "lucide-react";
 import { useTerminal } from "@/lib/terminal/store";
-import { INDICATORS, INSTRUMENTS, OPERATORS, TIMEFRAMES } from "@/lib/terminal/mock";
-import { Empty, Panel, btn, inputCls } from "@/components/terminal/ui";
-import type { ParamValue, Rule, Strategy, StrategyTemplate } from "@/lib/terminal/types";
+import { INDICATORS } from "@/lib/terminal/mock";
+import { Empty, Panel, Select, inputCls } from "@/components/terminal";
+import type { ParamValue, Rule, Strategy } from "@/lib/terminal/types";
 
-interface ParamDef {
-  key: string;
-  label: string;
-  type: "number" | "text" | "time";
-  step?: number;
-  min?: number;
-  max?: number;
-  help?: string;
+const INSTRUMENTS_LIST = ["NIFTY 50", "BANKNIFTY", "Stocks", "Options"];
+const TIMEFRAMES_LIST = ["1m", "5m", "15m", "1h"];
+const OPERATORS_LIST = ["crosses above", "crosses below", "greater than", "less than", "equals"];
+
+function emptyRule(): Rule {
+  return { indicator: "EMA 9", operator: "crosses above", value: "EMA 21" };
 }
 
-const TEMPLATE_PARAMS: Record<StrategyTemplate, ParamDef[]> = {
-  ORB: [
-    {
-      key: "rangeCandleCount",
-      label: "Range candle count",
-      type: "number",
-      min: 1,
-      max: 30,
-      help: "Candles that form the opening range",
-    },
-    {
-      key: "initialSlPercent",
-      label: "Initial SL %",
-      type: "number",
-      step: 0.1,
-      min: 0.1,
-      max: 20,
-    },
-    { key: "tslLockPercent", label: "TSL lock %", type: "number", step: 0.1, min: 0, max: 20 },
-    { key: "tslTrailStep", label: "TSL trail step %", type: "number", step: 0.1, min: 0, max: 10 },
-    { key: "perTradeAmount", label: "Per-trade amount (₹)", type: "number", min: 100 },
-    { key: "maxTradesPerStock", label: "Max trades per stock", type: "number", min: 1, max: 20 },
-    { key: "squareOffTime", label: "Square-off time", type: "time" },
-  ],
-  FinBaba: [
-    { key: "isl", label: "ISL (points)", type: "number", min: 1 },
-    { key: "csl", label: "CSL (points)", type: "number", min: 1 },
-    { key: "level", label: "Level (L0–L4)", type: "text" },
-    { key: "lots", label: "Lots", type: "number", min: 1, max: 100 },
-    { key: "squareOffTime", label: "Square-off time", type: "time" },
-  ],
-  Custom: [
-    { key: "stopLossPercent", label: "Stop-loss %", type: "number", step: 0.1, min: 0.1, max: 50 },
-    { key: "targetPercent", label: "Target %", type: "number", step: 0.1, min: 0.1, max: 100 },
-    { key: "perTradeAmount", label: "Per-trade amount (₹)", type: "number", min: 100 },
-    { key: "squareOffTime", label: "Square-off time", type: "time" },
-  ],
-};
-
-const DEFAULTS: Record<StrategyTemplate, Record<string, ParamValue>> = {
-  ORB: {
-    rangeCandleCount: 5,
-    initialSlPercent: 2,
-    tslLockPercent: 1.5,
-    tslTrailStep: 0.5,
-    perTradeAmount: 10000,
-    maxTradesPerStock: 2,
-    squareOffTime: "15:19",
-  },
-  FinBaba: { isl: 50, csl: 30, level: "L0", lots: 1, squareOffTime: "15:15" },
-  Custom: { stopLossPercent: 1, targetPercent: 2, perTradeAmount: 10000, squareOffTime: "15:15" },
-};
-
-const emptyRule = (): Rule => ({ indicator: INDICATORS[0], operator: OPERATORS[0], value: "" });
-
-function RuleEditor({
-  title,
-  rules,
-  onChange,
-}: {
-  title: string;
-  rules: Rule[];
-  onChange: (r: Rule[]) => void;
-}) {
+function RuleBuilder({ rules, onChange }: { rules: Rule[]; onChange: (r: Rule[]) => void }) {
   return (
-    <Panel
-      title={title}
-      right={
-        <button
-          onClick={() => onChange([...rules, emptyRule()])}
-          className={`${btn} bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1`}
-        >
-          <Plus className="w-3.5 h-3.5" /> Add condition
-        </button>
-      }
-    >
+    <div className="space-y-4">
       {rules.length === 0 ? (
         <Empty text="No conditions. Add at least one." />
       ) : (
-        <div className="p-4 space-y-2">
+        <div className="space-y-3">
           {rules.map((r, i) => (
-            <div key={i} className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] text-slate-500 w-10">{i === 0 ? "IF" : "AND"}</span>
-              <select
-                className={`${inputCls} !w-auto`}
+            <div
+              key={i}
+              className="flex flex-wrap items-center gap-3 bg-slate-50 p-3 rounded-lg border border-slate-100"
+            >
+              <span className="text-[12px] font-bold text-slate-500 w-8 text-center">
+                {i === 0 ? "IF" : "AND"}
+              </span>
+              <Select
+                className="w-[140px]"
                 value={r.indicator}
-                aria-label="Indicator"
-                onChange={(e) =>
-                  onChange(rules.map((x, j) => (j === i ? { ...x, indicator: e.target.value } : x)))
+                onChange={(val) =>
+                  onChange(rules.map((x, j) => (j === i ? { ...x, indicator: val } : x)))
                 }
-              >
-                {INDICATORS.map((o) => (
-                  <option key={o}>{o}</option>
-                ))}
-              </select>
-              <select
-                className={`${inputCls} !w-auto`}
+                options={INDICATORS.map((o) => ({ value: o, label: o }))}
+              />
+              <Select
+                className="w-[140px]"
                 value={r.operator}
-                aria-label="Operator"
-                onChange={(e) =>
-                  onChange(rules.map((x, j) => (j === i ? { ...x, operator: e.target.value } : x)))
+                onChange={(val) =>
+                  onChange(rules.map((x, j) => (j === i ? { ...x, operator: val } : x)))
                 }
-              >
-                {OPERATORS.map((o) => (
-                  <option key={o}>{o}</option>
-                ))}
-              </select>
+                options={OPERATORS_LIST.map((o) => ({ value: o, label: o }))}
+              />
               <input
-                className={`${inputCls} !w-40`}
+                className={`${inputCls} !w-[140px]`}
                 value={r.value}
                 placeholder="value or indicator"
-                aria-label="Value"
                 onChange={(e) =>
                   onChange(rules.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))
                 }
               />
               <button
                 onClick={() => onChange(rules.filter((_, j) => j !== i))}
-                aria-label="Remove condition"
-                className="text-slate-500 hover:text-rose-400"
+                className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-md ml-auto transition-colors"
+                title="Remove condition"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -146,7 +67,13 @@ function RuleEditor({
           ))}
         </div>
       )}
-    </Panel>
+      <button
+        onClick={() => onChange([...rules, emptyRule()])}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+      >
+        <Plus className="w-4 h-4" /> Add condition
+      </button>
+    </div>
   );
 }
 
@@ -162,14 +89,14 @@ export default function StrategyEditor() {
       existing ?? {
         id: `s-${Date.now()}`,
         name: "",
-        template: "ORB",
-        instrument: INSTRUMENTS[0],
+        template: "Custom",
+        instrument: "NIFTY 50",
         timeframe: "5m",
         stage: "Draft",
         status: "stopped",
         version: 1,
-        params: { ...DEFAULTS.ORB },
-        entryRules: [],
+        params: { stopLoss: 1, targetProfit: 2, quantity: 100 },
+        entryRules: [emptyRule()],
         exitRules: [],
       }
   );
@@ -178,29 +105,12 @@ export default function StrategyEditor() {
   const errors = useMemo(() => {
     const e: string[] = [];
     if (!form.name.trim()) e.push("Name is required");
-    for (const d of TEMPLATE_PARAMS[form.template]) {
-      const v = form.params[d.key];
-      if (v === "" || v === undefined) e.push(`${d.label} is required`);
-      else if (d.type === "number") {
-        const n = Number(v);
-        if (Number.isNaN(n)) e.push(`${d.label} must be a number`);
-        else if (d.min !== undefined && n < d.min) e.push(`${d.label} must be at least ${d.min}`);
-        else if (d.max !== undefined && n > d.max) e.push(`${d.label} must be at most ${d.max}`);
-      }
-    }
-    if (form.template === "FinBaba" && !/^L[0-4]$/.test(String(form.params.level ?? "")))
-      e.push("Level must be L0 to L4");
-    if (form.template === "Custom") {
-      if (!form.entryRules?.length) e.push("Add at least one entry condition");
-      if (!form.exitRules?.length) e.push("Add at least one exit condition");
-      [...(form.entryRules ?? []), ...(form.exitRules ?? [])].forEach((r) => {
-        if (!r.value.trim()) e.push("Every condition needs a value");
-      });
-    }
-    return Array.from(new Set(e));
+    if (form.entryRules && form.entryRules.length === 0)
+      e.push("At least one entry condition is required");
+    return e;
   }, [form]);
 
-  if (!isNew && !existing) {
+  if (!existing && !isNew) {
     return (
       <Panel>
         <Empty text="Strategy not found." />
@@ -210,9 +120,12 @@ export default function StrategyEditor() {
   if (existing?.status === "running") {
     return (
       <Panel>
-        <div className="p-6 text-sm text-slate-300 space-y-3">
-          <p>This strategy is running. Stop it before editing.</p>
-          <Link href="/terminal/strategies" className="text-blue-400 hover:underline">
+        <div className="p-6 text-sm text-slate-500 space-y-3 text-center">
+          <p>This strategy is currently running. You must stop it before editing.</p>
+          <Link
+            href="/terminal/strategies"
+            className="inline-block px-4 py-2 bg-slate-100 text-slate-800 rounded-lg font-medium hover:bg-slate-200"
+          >
             Back to strategies
           </Link>
         </div>
@@ -223,150 +136,153 @@ export default function StrategyEditor() {
   const setParam = (key: string, value: ParamValue) =>
     setForm((f) => ({ ...f, params: { ...f.params, [key]: value } }));
 
-  const changeTemplate = (tpl: StrategyTemplate) =>
-    setForm((f) => ({
-      ...f,
-      template: tpl,
-      params: { ...DEFAULTS[tpl] },
-      entryRules: tpl === "Custom" ? (f.entryRules ?? []) : [],
-      exitRules: tpl === "Custom" ? (f.exitRules ?? []) : [],
-    }));
-
   const save = () => {
     setTouched(true);
     if (errors.length) return;
-    const params: Record<string, ParamValue> = {};
-    for (const d of TEMPLATE_PARAMS[form.template])
-      params[d.key] = d.type === "number" ? Number(form.params[d.key]) : form.params[d.key];
-    t.saveStrategy({ ...form, name: form.name.trim(), params });
+    t.saveStrategy({ ...form, name: form.name.trim() }, isNew);
     router.push("/terminal/strategies");
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
+    <div className="max-w-[1600px] w-full mx-auto flex flex-col space-y-6 text-slate-900 pb-8">
       <div>
-        <Link href="/terminal/strategies" className="text-xs text-blue-400 hover:underline">
-          ← Strategies
+        <Link
+          href="/terminal/strategies"
+          className="text-[13px] font-medium text-slate-500 hover:text-slate-800 transition-colors"
+        >
+          ← Back to Strategies
         </Link>
-        <h1 className="text-xl font-bold text-white mt-1">
-          {isNew ? "New strategy" : `Edit: ${existing?.name}`}
+        <h1 className="text-2xl font-bold text-slate-900 mt-2">
+          {isNew ? "Create a Strategy" : `Edit: ${existing?.name}`}
         </h1>
         {!isNew && (
-          <p className="text-xs text-slate-500">
+          <p className="text-sm text-slate-500 mt-1">
             Saving creates version v{(existing?.version ?? 0) + 1}.
           </p>
         )}
       </div>
 
-      <Panel title="Basics">
-        <div className="p-4 grid md:grid-cols-2 gap-4">
-          <label className="text-xs text-slate-400 space-y-1 md:col-span-2">
-            Name
+      <Panel className="p-8">
+        {/* Question 1 */}
+        <div>
+          <h2 className="text-lg font-bold text-slate-900 flex gap-3">
+            <span className="text-blue-600">1.</span> What is your strategy name?
+          </h2>
+          <div className="mt-4 ml-7">
             <input
               className={inputCls}
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="e.g. ORB Nifty Morning"
+              placeholder="Example: NIFTY Momentum"
             />
-          </label>
-          <label className="text-xs text-slate-400 space-y-1">
-            Template
-            <select
-              className={inputCls}
-              value={form.template}
-              disabled={!isNew}
-              onChange={(e) => changeTemplate(e.target.value as StrategyTemplate)}
-            >
-              <option value="ORB">ORB (opening range breakout)</option>
-              <option value="FinBaba">FinBaba (levels)</option>
-              <option value="Custom">Custom (rule builder)</option>
-            </select>
-          </label>
-          <label className="text-xs text-slate-400 space-y-1">
-            Instrument
-            <select
-              className={inputCls}
-              value={form.instrument}
-              onChange={(e) => setForm({ ...form, instrument: e.target.value })}
-            >
-              {INSTRUMENTS.map((i) => (
-                <option key={i}>{i}</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs text-slate-400 space-y-1">
-            Timeframe
-            <select
-              className={inputCls}
-              value={form.timeframe}
-              onChange={(e) => setForm({ ...form, timeframe: e.target.value })}
-            >
-              {TIMEFRAMES.map((i) => (
-                <option key={i}>{i}</option>
-              ))}
-            </select>
-          </label>
+          </div>
         </div>
-      </Panel>
-
-      <Panel title="Parameters">
-        <div className="p-4 grid md:grid-cols-2 gap-4">
-          {TEMPLATE_PARAMS[form.template].map((d) => (
-            <label key={d.key} className="text-xs text-slate-400 space-y-1">
-              {d.label}
-              <input
-                className={inputCls}
-                type={d.type}
-                step={d.step}
-                min={d.min}
-                max={d.max}
-                value={String(form.params[d.key] ?? "")}
-                onChange={(e) => setParam(d.key, e.target.value)}
+        <div className="border-t border-slate-100"></div>
+        {/* Question 2 & 3 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-10">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 flex gap-3">
+              <span className="text-blue-600">2.</span> What do you want to trade?
+            </h2>
+            <div className="mt-4 ml-7">
+              <Select
+                value={form.instrument}
+                onChange={(val) => setForm({ ...form, instrument: val })}
+                options={INSTRUMENTS_LIST.map((i) => ({ value: i, label: i }))}
               />
-              {d.help && <span className="block text-[11px] text-slate-600">{d.help}</span>}
-            </label>
-          ))}
+            </div>
+          </div>
+
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 flex gap-3">
+              <span className="text-blue-600">3.</span> Which timeframe do you want?
+            </h2>
+            <div className="mt-4 ml-7">
+              <Select
+                value={form.timeframe}
+                onChange={(val) => setForm({ ...form, timeframe: val })}
+                options={TIMEFRAMES_LIST.map((t) => ({ value: t, label: t }))}
+              />
+            </div>
+          </div>
+        </div>
+        <div className="border-t border-slate-100"></div>
+        {/* Question 4 */}{" "}
+        <div className="mt-10">
+          <h2 className="text-lg font-bold text-slate-900 flex gap-3">
+            <span className="text-blue-600">4.</span> When should the strategy enter a trade?
+          </h2>
+          <p className="text-[13px] text-slate-500 ml-7 mt-1 mb-4">
+            Visual condition builder (Example: EMA 9 crosses above EMA 21)
+          </p>
+          <div className="ml-7">
+            <RuleBuilder
+              rules={form.entryRules ?? []}
+              onChange={(rules) => setForm({ ...form, entryRules: rules })}
+            />
+          </div>
+        </div>
+        <div className="border-t border-slate-100"></div>
+        {/* Question 5 */}{" "}
+        <div className="mt-10">
+          <h2 className="text-lg font-bold text-slate-900 flex gap-3">
+            <span className="text-blue-600">5.</span> How should the strategy exit and manage risk?
+          </h2>
+          <p className="text-[13px] text-slate-500 ml-7 mt-1 mb-4">Simple settings</p>
+          <div className="ml-7 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium text-slate-700">Stop loss %</label>
+              <input
+                type="number"
+                step="0.1"
+                className={inputCls}
+                value={form.params.stopLoss as number}
+                onChange={(e) => setParam("stopLoss", Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium text-slate-700">Target profit %</label>
+              <input
+                type="number"
+                step="0.1"
+                className={inputCls}
+                value={form.params.targetProfit as number}
+                onChange={(e) => setParam("targetProfit", Number(e.target.value))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium text-slate-700">Quantity</label>
+              <input
+                type="number"
+                className={inputCls}
+                value={form.params.quantity as number}
+                onChange={(e) => setParam("quantity", Number(e.target.value))}
+              />
+            </div>
+          </div>
         </div>
       </Panel>
-
-      {form.template === "Custom" && (
-        <>
-          <RuleEditor
-            title="Entry conditions (all must be true)"
-            rules={form.entryRules ?? []}
-            onChange={(r) => setForm({ ...form, entryRules: r })}
-          />
-          <RuleEditor
-            title="Exit conditions (any can trigger)"
-            rules={form.exitRules ?? []}
-            onChange={(r) => setForm({ ...form, exitRules: r })}
-          />
-        </>
-      )}
 
       {touched && errors.length > 0 && (
-        <div
-          role="alert"
-          className="border border-rose-800 bg-rose-950/50 rounded-lg p-3 text-xs text-rose-300"
-        >
-          <ul className="list-disc pl-4 space-y-0.5">
-            {errors.map((e) => (
-              <li key={e}>{e}</li>
+        <div className="p-4 bg-rose-50 text-rose-600 rounded-lg text-sm font-medium border border-rose-200">
+          <ul className="list-disc pl-5 space-y-1">
+            {errors.map((e, i) => (
+              <li key={i}>{e}</li>
             ))}
           </ul>
         </div>
       )}
 
-      <div className="flex gap-3">
+      <div className="flex gap-4">
         <button
           onClick={save}
-          className={`${btn} bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5`}
+          className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors shadow-sm text-center"
         >
-          {isNew ? "Create strategy (Draft)" : "Save new version"}
+          {isNew ? "Create Strategy" : "Save Changes"}
         </button>
         <Link
           href="/terminal/strategies"
-          className={`${btn} text-slate-400 hover:text-white py-2.5`}
+          className="px-6 py-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl transition-colors shadow-sm text-center"
         >
           Cancel
         </Link>
