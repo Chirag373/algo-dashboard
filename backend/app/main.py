@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router as rest_router
 from app.api.ws import router as ws_router
+from app.api.kite_routes import router as kite_router
 from app.core.config import settings
 from app.db.database import Database
 from app.services.broker import PaperBroker
@@ -63,6 +64,7 @@ def get_application() -> FastAPI:
         allow_headers=["*"],
     )
     application.include_router(rest_router, prefix=settings.API_V1_STR)
+    application.include_router(kite_router, prefix=f"{settings.API_V1_STR}/kite")
     application.include_router(ws_router)
     return application
 

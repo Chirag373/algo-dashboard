@@ -17,11 +17,11 @@ import { Panel, Stat } from "./ui";
 
 const tip = {
   background: "#ffffff",
-  border: "1px solid #e2e8f0",
+  border: "none",
   fontSize: 12,
   color: "#0f172a",
-  borderRadius: "8px",
-  boxShadow: "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+  borderRadius: "12px",
+  boxShadow: "0 8px 30px rgba(0, 0, 0, 0.12)",
 };
 
 export default function PerformanceView({ days, capital }: { days: DayResult[]; capital: number }) {

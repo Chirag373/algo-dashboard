@@ -8,7 +8,15 @@ Stage = Literal["Draft", "Backtest", "Paper", "Live"]
 Status = Literal["running", "paused", "stopped"]
 
 TIMEFRAMES = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
-INSTRUMENTS = ["NIFTY", "BANKNIFTY", "NIFTY 50 Stocks", "Custom Watchlist"]
+INSTRUMENTS = [
+    "NIFTY",
+    "BANKNIFTY",
+    "NIFTY 50 Stocks",
+    "Custom Watchlist",
+    "NIFTY 50",
+    "Stocks",
+    "Options",
+]
 
 # key -> (min, max) for numeric params; "time" for HH:MM; "level" for L0-L4
 PARAM_RULES: dict[str, dict[str, Any]] = {
@@ -45,7 +53,7 @@ class Rule(BaseModel):
 
 class StrategyIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    template: Template
+    template: Template = "Custom"
     instrument: str
     timeframe: str
     params: dict[str, Any]
@@ -76,10 +84,38 @@ class StrategyIn(BaseModel):
 
     @model_validator(mode="after")
     def check_params(self) -> "StrategyIn":
-        rules = PARAM_RULES[self.template]
+        rules = PARAM_RULES.get(self.template, PARAM_RULES["Custom"])
         clean: dict[str, Any] = {}
+
+        # Handle aliases and defaults for Custom template
+        if self.template == "Custom":
+            if "stopLossPercent" not in self.params and "stopLoss" in self.params:
+                self.params["stopLossPercent"] = self.params["stopLoss"]
+            if "targetPercent" not in self.params and "targetProfit" in self.params:
+                self.params["targetPercent"] = self.params["targetProfit"]
+            if "perTradeAmount" not in self.params and "quantity" in self.params:
+                try:
+                    self.params["perTradeAmount"] = max(100.0, float(self.params["quantity"]) * 100)
+                except (ValueError, TypeError):
+                    self.params["perTradeAmount"] = 10000.0
+            if "squareOffTime" not in self.params:
+                self.params["squareOffTime"] = "15:15"
+
         for key, rule in rules.items():
             if key not in self.params or self.params[key] in ("", None):
+                # Apply defaults for optional or standard parameters
+                if key == "squareOffTime":
+                    clean[key] = "15:15"
+                    continue
+                elif key == "stopLossPercent":
+                    clean[key] = 1.0
+                    continue
+                elif key == "targetPercent":
+                    clean[key] = 2.0
+                    continue
+                elif key == "perTradeAmount":
+                    clean[key] = 10000
+                    continue
                 raise ValueError(f"Parameter '{key}' is required")
             v = self.params[key]
             if rule == "time":
@@ -101,9 +137,18 @@ class StrategyIn(BaseModel):
                 if hi is not None and n > hi:
                     raise ValueError(f"'{key}' must be at most {hi}")
                 clean[key] = int(n) if n.is_integer() else n
+
+        # Retain original frontend fields (stopLoss, targetProfit, quantity, etc.)
+        for k, v in self.params.items():
+            if k not in clean:
+                clean[k] = v
+
         self.params = clean
-        if self.template == "Custom" and (not self.entryRules or not self.exitRules):
-            raise ValueError("Custom strategies need at least one entry and one exit condition")
+        if self.template == "Custom":
+            if not self.entryRules:
+                self.entryRules = [Rule(indicator="EMA 9", operator="crosses above", value="EMA 21")]
+            if not self.exitRules:
+                self.exitRules = [Rule(indicator="Target / StopLoss", operator="equals", value="Triggered")]
         if self.template != "Custom":
             self.entryRules, self.exitRules = [], []
         return self

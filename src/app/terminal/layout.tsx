@@ -1,3 +1,5 @@
+"use client";
+
 import TerminalShell from "@/components/terminal/TerminalShell";
 
 export default function TerminalLayout({ children }: { children: React.ReactNode }) {

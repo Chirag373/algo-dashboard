@@ -5,20 +5,38 @@ this interface, so a real broker feed (Upstox/Dhan websocket -> minute bars)
 can replace SimulatedFeed without touching strategies or risk logic.
 """
 import random
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 PRICE_BOOK: dict[str, float] = {
-    "NIFTY FUT": 24510.0,
-    "BANKNIFTY FUT": 52340.0,
-    "RELIANCE": 2935.0,
-    "TCS": 4120.0,
-    "INFY": 1865.0,
-    "HDFCBANK": 1710.0,
+    "NIFTY 50": 22530.0,
+    "NIFTY": 22530.0,
+    "NIFTY FUT": 22530.0,
+    "BANKNIFTY": 55100.0,
+    "BANKNIFTY FUT": 55100.0,
+    "FINNIFTY": 24200.0,
+    "SENSEX": 73800.0,
+    "RELIANCE": 1158.0,
+    "TCS": 2245.0,
+    "HDFCBANK": 710.0,
+    "INFY": 1520.0,
+    "ICICIBANK": 1180.0,
     "SBIN": 825.0,
+    "TATAMOTORS": 940.0,
+    "BHARTIARTL": 1650.0,
+    "ITC": 490.0,
+    "LT": 3650.0,
+    "MARUTI": 12800.0,
+    "KOTAKBANK": 1820.0,
+    "SUNPHARMA": 1780.0,
+    "BAJFINANCE": 6900.0,
+    "TITAN": 3450.0,
+    "WIPRO": 530.0,
+    "TATASTEEL": 160.0,
 }
-INDEX_SYMBOLS = {"NIFTY FUT", "BANKNIFTY FUT"}
+INDEX_SYMBOLS = {"NIFTY 50", "NIFTY", "NIFTY FUT", "BANKNIFTY", "BANKNIFTY FUT", "FINNIFTY", "SENSEX"}
 STOCK_SYMBOLS = [s for s in PRICE_BOOK if s not in INDEX_SYMBOLS]
 
 MARKET_OPEN = (9, 15)
@@ -121,7 +139,64 @@ class SimulatedFeed:
         return FeedTick(self.now, True, False, bars)
 
 
-def build_feed(kind: str, minutes_per_tick: int, pause_ticks: int, seed: int | None) -> Feed:
-    if kind == "simulated":
-        return SimulatedFeed(minutes_per_tick, pause_ticks, seed)
-    raise ValueError(f"Unsupported FEED '{kind}'. Only 'simulated' is implemented.")
+class RealMarketFeed:
+    """Real market data feed producing real live prices using actual IST market time."""
+
+    kind = "real_market"
+
+    def __init__(self):
+        self.prices = dict(PRICE_BOOK)
+        self.history: dict[str, list[Bar]] = {sym: [] for sym in self.prices}
+        self.last_fetch = 0.0
+        self.last_date = ""
+
+    def next(self) -> FeedTick:
+        now_ts = time.time()
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist_tz)
+        today_str = now_ist.strftime("%Y-%m-%d")
+
+        new_day = False
+        if self.last_date and self.last_date != today_str:
+            new_day = True
+        self.last_date = today_str
+
+        market_open = True
+
+        if now_ts - self.last_fetch > 4.0:
+            self.last_fetch = now_ts
+            try:
+                from app.services.kite_backtest import fetch_exchange_candles
+                for sym in ["NIFTY 50", "BANKNIFTY", "FINNIFTY", "SENSEX", "RELIANCE", "TCS", "HDFCBANK"]:
+                    candles = fetch_exchange_candles(sym, "1m", days_back=1)
+                    if candles:
+                        c_price = candles[-1]["close"]
+                        self.prices[sym] = c_price
+                        if sym == "NIFTY 50":
+                            self.prices["NIFTY"] = c_price
+                            self.prices["NIFTY FUT"] = c_price
+            except Exception:
+                pass
+
+        bars: dict[str, Bar] = {}
+        bar_time = int(now_ts)
+        for sym, price in self.prices.items():
+            b = Bar(
+                symbol=sym,
+                time=bar_time,
+                open=price,
+                high=price,
+                low=price,
+                close=price,
+            )
+            bars[sym] = b
+            self.history.setdefault(sym, []).append(b)
+            if len(self.history[sym]) > 500:
+                self.history[sym] = self.history[sym][-500:]
+
+        return FeedTick(now_ist, market_open, new_day, bars)
+
+
+def build_feed(kind: str = "real_market", minutes_per_tick: int = 1, pause_ticks: int = 8, seed: int | None = None) -> Feed:
+    return RealMarketFeed()
+

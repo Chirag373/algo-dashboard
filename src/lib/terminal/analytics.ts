@@ -5,7 +5,7 @@ export interface DayResult {
   pnl: number;
   trades: number;
   wins: number;
-  strategy: string;
+  strategy?: string;
 }
 
 export interface Metrics {

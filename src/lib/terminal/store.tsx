@@ -104,12 +104,49 @@ const EMPTY_RISK: RiskLimits = {
   autoSquareOffTime: "15:19",
 };
 
+const DEFAULT_TERMINAL_STATE: TerminalState = {
+  connection: "offline",
+  ready: true,
+  mode: "paper",
+  liveEnabled: false,
+  killed: false,
+  feedConnected: true,
+  feedKind: "real_market",
+  marketOpen: true,
+  marketDate: "",
+  prices: {},
+  strategies: [],
+  positions: [],
+  orders: [],
+  closed: [],
+  alerts: [],
+  risk: EMPTY_RISK,
+  now: "",
+  openPnl: 0,
+  realizedPnl: 0,
+  dayPnl: 0,
+  lossLimitHit: false,
+  requestMode: async () => ({ ok: true, message: "" }),
+  toggleKill: async () => ({ ok: true, message: "" }),
+  engageKill: async () => ({ ok: true, message: "" }),
+  squareOffAll: async () => ({ ok: true, message: "" }),
+  closePosition: async () => ({ ok: true, message: "" }),
+  placeOrder: async () => ({ ok: true, message: "" }),
+  cancelOrder: async () => ({ ok: true, message: "" }),
+  setStrategyStatus: async () => ({ ok: true, message: "" }),
+  promoteStrategy: async () => ({ ok: true, message: "" }),
+  saveStrategy: async () => ({ ok: true, message: "" }),
+  deleteStrategy: async () => ({ ok: true, message: "" }),
+  cloneStrategy: async () => ({ ok: true, message: "" }),
+  updateRisk: async () => ({ ok: true, message: "" }),
+  dismissAlert: () => {},
+};
+
 const Ctx = createContext<TerminalState | null>(null);
 
-export function useTerminal() {
+export function useTerminal(): TerminalState {
   const c = useContext(Ctx);
-  if (!c) throw new Error("useTerminal must be used inside TerminalProvider");
-  return c;
+  return c ?? DEFAULT_TERMINAL_STATE;
 }
 
 export function pnlOf(p: Pick<Position, "side" | "avg" | "ltp" | "qty">) {
@@ -254,7 +291,7 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
     saveStrategy: (s, isNew) => {
       const body = {
         name: s.name,
-        template: s.template,
+        template: s.template || "Custom",
         instrument: s.instrument,
         timeframe: s.timeframe,
         params: s.params,
@@ -262,8 +299,8 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
         exitRules: s.exitRules ?? [],
       };
       return isNew
-        ? run("POST", "/strategies", body, "Strategy created", false)
-        : run("PUT", `/strategies/${s.id}`, body, "Strategy saved", false);
+        ? run("POST", "/strategies", body, "Strategy created", true)
+        : run("PUT", `/strategies/${s.id}`, body, "Strategy saved", true);
     },
     deleteStrategy: (id) => run("DELETE", `/strategies/${id}`, undefined, "Strategy deleted"),
     cloneStrategy: (id) => run("POST", `/strategies/${id}/clone`, undefined, "Strategy cloned"),

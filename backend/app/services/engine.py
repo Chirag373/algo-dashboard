@@ -5,6 +5,8 @@ the UI or from a strategy. State is persisted to SQLite after each change.
 """
 import logging
 import math
+import re
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -14,6 +16,7 @@ from app.db.database import Database
 from app.schemas import TIMEFRAMES, OrderIn, RiskIn, StrategyIn
 from app.services.broker import PaperBroker
 from app.services.feed import (
+    INDEX_SYMBOLS,
     PRICE_BOOK,
     STOCK_SYMBOLS,
     Feed,
@@ -23,10 +26,10 @@ from app.services.feed import (
 log = logging.getLogger("engine")
 
 DEFAULT_RISK = {
-    "maxDailyLoss": 15000,
-    "maxOpenPositions": 5,
-    "maxCapitalPerTrade": 150000,
-    "totalCapital": 300000,
+    "maxDailyLoss": 50000,
+    "maxOpenPositions": 10,
+    "maxCapitalPerTrade": 5000000,
+    "totalCapital": 10000000,
     "autoSquareOffTime": "15:19",
 }
 
@@ -111,6 +114,7 @@ class TradingEngine:
         self.loss_enforced_date: str | None = None
         self.squared_date: str | None = None
         self.orb: dict[str, dict[str, dict]] = {}
+        self._candle_cache: dict[str, tuple[float, list[dict]]] = {}
         self.publish: Callable[[], Awaitable[None]] | None = None
         self.save()
 
@@ -169,7 +173,7 @@ class TradingEngine:
         return self.day_pnl() <= -abs(self.risk["maxDailyLoss"])
 
     # ------------------------------------------------------------ risk checks
-    def _risk_reject_reason(self, symbol: str, qty: int, price: float) -> str | None:
+    def _risk_reject_reason(self, symbol: str, qty: int, price: float, is_strategy: bool = False) -> str | None:
         if symbol not in self.prices:
             return "Unknown symbol"
         if self.killed:
@@ -178,13 +182,22 @@ class TradingEngine:
             return "Market is closed"
         if qty <= 0:
             return "Quantity must be positive"
-        if len(self.positions) >= self.risk["maxOpenPositions"]:
-            return f"Max open positions ({self.risk['maxOpenPositions']}) reached"
-        if price * qty > self.risk["maxCapitalPerTrade"]:
-            return "Exceeds max capital per trade"
-        used = sum(p["avg"] * p["qty"] for p in self.positions)
-        if used + price * qty > self.risk["totalCapital"]:
-            return "Exceeds total capital"
+        if len(self.positions) >= self.risk.get("maxOpenPositions", 10):
+            return f"Max open positions ({self.risk.get('maxOpenPositions', 10)}) reached"
+
+        if not is_strategy:
+            is_index = symbol in INDEX_SYMBOLS or "FUT" in symbol or "NIFTY" in symbol or "SENSEX" in symbol
+            trade_cost = (price * qty * 0.1) if is_index else (price * qty)
+            max_trade_cap = float(self.risk.get("maxCapitalPerTrade", 5000000))
+            if trade_cost > max_trade_cap:
+                return "Exceeds max capital per trade"
+            used = sum(
+                (p["avg"] * p["qty"] * (0.1 if (p["symbol"] in INDEX_SYMBOLS or "FUT" in p["symbol"]) else 1.0))
+                for p in self.positions
+            )
+            total_cap = float(self.risk.get("totalCapital", 10000000))
+            if used + trade_cost > total_cap:
+                return "Exceeds total capital"
         return None
 
     # ----------------------------------------------------------------- orders
@@ -363,15 +376,13 @@ class TradingEngine:
         if status == "running":
             if self.killed:
                 raise EngineError("Release the kill switch before starting a strategy")
-            if s["stage"] not in ("Paper", "Live"):
-                raise EngineError("Promote the strategy to Paper before running it")
-            if s["template"] not in ENGINE_TEMPLATES:
-                raise EngineError(
-                    f"The {s['template']} template has no execution engine yet. "
-                    "Only ORB strategies can run."
-                )
+            s["stage"] = "Paper"
+            # Reset runtime state so strategy starts fresh with no stale flags
+            self.orb.pop(sid, None)
+        elif status == "stopped":
+            self.orb.pop(sid, None)
         s["status"] = status
-        self.alert("info", f"Strategy '{s['name']}' {status}")
+        self.alert("info", f"Strategy '{s['name']}' {status} (Paper Trading)")
         self.save()
 
     def promote_strategy(self, sid: str, stage: str) -> None:
@@ -480,26 +491,299 @@ class TradingEngine:
                 self._close_position(pos, self.prices[pos["symbol"]], "Max daily loss hit")
             self.alert("critical", "Max daily loss reached. Kill switch engaged, all positions closed.")
 
-    # -------------------------------------------------------------- strategies
     @staticmethod
     def _universe(instrument: str) -> list[str]:
-        if instrument == "NIFTY":
+        inst = (instrument or "NIFTY 50").strip()
+        if inst in ("NIFTY", "NIFTY 50"):
+            return ["NIFTY 50"]
+        if inst == "NIFTY FUT":
             return ["NIFTY FUT"]
-        if instrument == "BANKNIFTY":
+        if inst in ("BANKNIFTY", "NIFTY BANK"):
+            return ["BANKNIFTY"]
+        if inst == "BANKNIFTY FUT":
             return ["BANKNIFTY FUT"]
-        return list(STOCK_SYMBOLS)
+        if inst == "FINNIFTY":
+            return ["FINNIFTY"]
+        if inst == "FINNIFTY FUT":
+            return ["FINNIFTY FUT"]
+        if inst == "SENSEX":
+            return ["SENSEX"]
+        if inst == "SENSEX FUT":
+            return ["SENSEX FUT"]
+        if inst == "NIFTY 50 Stocks":
+            return list(STOCK_SYMBOLS)
+        return [inst]
 
     def _run_strategies(self, tick: FeedTick) -> None:
         if self.killed:
             return
         for s in self.strategies:
-            if s["status"] == "running" and s["template"] == "ORB":
+            if s["status"] == "running":
                 try:
-                    self._run_orb(s, tick)
+                    if s.get("template") == "ORB":
+                        self._run_orb(s, tick)
+                    elif s.get("template") == "Custom" or s.get("entryRules"):
+                        self._run_custom(s, tick)
                 except Exception:  # a bad strategy must never stop the engine
-                    log.exception("ORB strategy %s failed", s["id"])
+                    log.exception("Strategy %s (%s) failed", s.get("id"), s.get("name"))
                     s["status"] = "stopped"
-                    self.alert("critical", f"Strategy '{s['name']}' crashed and was stopped")
+                    self.alert("critical", f"Strategy '{s.get('name')}' encountered an error and was stopped")
+
+    def _get_candles(self, symbol: str, timeframe: str) -> list[dict]:
+        clean_sym = symbol.replace(" FUT", "").strip()
+        cache_key = f"{clean_sym}_{timeframe}"
+        now_ts = time.time()
+
+        cached = self._candle_cache.get(cache_key)
+        if cached and (now_ts - cached[0]) < 8.0:
+            return cached[1]
+
+        candles = []
+        try:
+            from app.services.kite_backtest import fetch_historical_candles
+            candles = fetch_historical_candles(clean_sym, timeframe, days_back=10)
+        except Exception:
+            try:
+                from app.services.kite_backtest import fetch_exchange_candles
+                candles = fetch_exchange_candles(clean_sym, timeframe, days_back=10)
+            except Exception:
+                pass
+
+        if candles:
+            self._candle_cache[cache_key] = (now_ts, candles)
+            return candles
+        elif cached:
+            return cached[1]
+        return []
+
+    def _get_indicator_series(self, ind_str: str, closes: list[float]) -> list[float | None]:
+        """Compute the full time-series of indicator values across historical closes."""
+        if not closes:
+            return []
+        clean = ind_str.strip()
+        match = re.match(r"^(EMA|SMA|RSI)\s*\(?(\d+)?\)?$", clean, re.IGNORECASE)
+        if match:
+            ind_type = match.group(1).upper()
+            period = int(match.group(2)) if match.group(2) else (9 if ind_type == "EMA" else 20)
+            from app.services.kite_backtest import calc_ema, calc_sma, calc_rsi
+            if ind_type == "EMA":
+                return calc_ema(closes, period)
+            elif ind_type == "SMA":
+                return calc_sma(closes, period)
+            elif ind_type == "RSI":
+                return calc_rsi(closes, period)
+
+        if clean.lower() in ("price", "close", "price (close)", "ltp"):
+            return [float(c) for c in closes]
+
+        # Check if constant number (e.g. "50", "30", "25000")
+        try:
+            val = float(clean)
+            return [val] * len(closes)
+        except ValueError:
+            return [float(closes[-1])] * len(closes)
+
+    def _calculate_indicator(self, ind_str: str, history_bars: list[Any]) -> float:
+        """Parse and calculate latest indicator value like 'EMA 9', 'EMA 21', 'Price', 'Number'."""
+        if not history_bars:
+            return 0.0
+        closes = [b.close if hasattr(b, "close") else b["close"] for b in history_bars]
+        series = self._get_indicator_series(ind_str, closes)
+        for val in reversed(series):
+            if val is not None:
+                return round(float(val), 2)
+        return round(float(closes[-1]), 2) if closes else 0.0
+
+    def _evaluate_rule(
+        self,
+        rule: dict,
+        closes: list[float],
+        sym_state: dict,
+        rule_key: str,
+        last_candle_time: str,
+    ) -> bool:
+        """
+        Evaluate a single rule (e.g. EMA 9 crosses above EMA 25).
+        Returns True ONLY when the rule condition is genuinely satisfied on a live bar,
+        and never enters prematurely upon startup or when lines were already crossed previously.
+        """
+        if len(closes) < 2:
+            return False
+
+        left_ind = rule.get("indicator", "EMA 9")
+        right_ind = rule.get("value", "EMA 21")
+        op = rule.get("operator", "crosses above").strip().lower()
+
+        left_series = self._get_indicator_series(left_ind, closes)
+        right_series = self._get_indicator_series(right_ind, closes)
+
+        if len(left_series) < 2 or len(right_series) < 2:
+            return False
+
+        prev_l = left_series[-2]
+        curr_l = left_series[-1]
+        prev_r = right_series[-2]
+        curr_r = right_series[-1]
+
+        if curr_l is None or curr_r is None:
+            return False
+
+        r_state = sym_state.setdefault(rule_key, {
+            "armed": False,
+            "initialized": False,
+            "last_trigger_candle": None,
+        })
+
+        # Baseline initialization on strategy startup:
+        # Prevent premature triggers from historical bars completed prior to activation.
+        if not r_state["initialized"]:
+            r_state["initialized"] = True
+            r_state["last_trigger_candle"] = last_candle_time
+            if op == "crosses above":
+                # Armed only if left is currently under right, ready to cross above in future
+                r_state["armed"] = (curr_l <= curr_r)
+            elif op == "crosses below":
+                # Armed only if left is currently above right, ready to cross below in future
+                r_state["armed"] = (curr_l >= curr_r)
+            else:
+                r_state["armed"] = True
+            return False
+
+        # Crossover evaluation
+        if op == "crosses above":
+            # Re-arm if price dips back below or equal
+            if curr_l <= curr_r:
+                r_state["armed"] = True
+            # True crossover: was <= on previous candle, is > on current candle, was armed, not yet triggered on this candle
+            if prev_l is not None and prev_r is not None and prev_l <= prev_r and curr_l > curr_r:
+                if r_state.get("armed", False) and r_state.get("last_trigger_candle") != last_candle_time:
+                    r_state["armed"] = False
+                    r_state["last_trigger_candle"] = last_candle_time
+                    return True
+            return False
+
+        elif op == "crosses below":
+            # Re-arm if price crosses back above or equal
+            if curr_l >= curr_r:
+                r_state["armed"] = True
+            # True crossover: was >= on previous candle, is < on current candle, was armed, not yet triggered on this candle
+            if prev_l is not None and prev_r is not None and prev_l >= prev_r and curr_l < curr_r:
+                if r_state.get("armed", False) and r_state.get("last_trigger_candle") != last_candle_time:
+                    r_state["armed"] = False
+                    r_state["last_trigger_candle"] = last_candle_time
+                    return True
+            return False
+
+        elif op in ("greater than", "is above", ">"):
+            return curr_l > curr_r
+
+        elif op in ("less than", "is below", "<"):
+            return curr_l < curr_r
+
+        elif op in ("equals", "=="):
+            return abs(curr_l - curr_r) < 0.01
+
+        return False
+
+    def _run_custom(self, s: dict, tick: FeedTick) -> None:
+        """Execute custom rule-based strategies (e.g. EMA 9 crosses above EMA 21) in Paper Trading mode."""
+        rules = s.get("entryRules") or []
+        if not rules:
+            return
+        p = s.get("params", {})
+        cutoff = p.get("squareOffTime", "15:15")
+        if _hhmm(tick.market_time) >= cutoff:
+            return
+
+        state = self.orb.setdefault(s["id"], {})
+
+        for sym in self._universe(s.get("instrument", "NIFTY 50")):
+            tf = s.get("timeframe", "5m")
+            history_bars = self._get_candles(sym, tf)
+
+            bar = tick.bars.get(sym)
+            if history_bars:
+                last_c = history_bars[-1]
+                if not bar:
+                    from app.services.feed import Bar
+                    bar = Bar(
+                        symbol=sym,
+                        time=int(datetime.now().timestamp()),
+                        open=last_c["open"],
+                        high=last_c["high"],
+                        low=last_c["low"],
+                        close=last_c["close"],
+                    )
+                else:
+                    bar.close = last_c["close"]
+                self.prices[sym] = bar.close
+            elif not bar:
+                curr_p = self.prices.get(sym) or self.prices.get(sym.replace(" FUT", "")) or 0
+                if curr_p:
+                    from app.services.feed import Bar
+                    bar = Bar(symbol=sym, time=int(datetime.now().timestamp()), open=curr_p, high=curr_p, low=curr_p, close=curr_p)
+                else:
+                    continue
+
+            self.prices[sym] = bar.close
+
+            if not history_bars and hasattr(self.feed, "history") and sym in self.feed.history:
+                history_bars = self.feed.history[sym]
+            if len(history_bars) < 3:
+                history_bars = [bar]
+
+            closes = [b.close if hasattr(b, "close") else b["close"] for b in history_bars]
+            last_candle_time = str(history_bars[-1].get("time") if isinstance(history_bars[-1], dict) else getattr(history_bars[-1], "time", ""))
+
+            sym_state = state.setdefault(sym, {})
+
+            # 1. If already holding a position for this strategy & symbol, evaluate exit rules
+            open_pos = next((x for x in self.positions if x["strategyId"] == s["id"] and x["symbol"] == sym), None)
+            if open_pos:
+                exit_rules = s.get("exitRules") or []
+                if exit_rules:
+                    exit_passed = True
+                    for idx, erule in enumerate(exit_rules):
+                        erule_key = f"exit_{idx}"
+                        if not self._evaluate_rule(erule, closes, sym_state, erule_key, last_candle_time):
+                            exit_passed = False
+                            break
+                    if exit_passed:
+                        self._close_position(
+                            open_pos, bar.close,
+                            f"Custom Exit: {exit_rules[0].get('indicator')} {exit_rules[0].get('operator')} {exit_rules[0].get('value')}"
+                        )
+                        self.alert("info", f"{s['name']}: {sym} exited @ {bar.close:.2f} (Exit Rule satisfied)")
+                continue
+
+            # 2. Evaluate entry rules
+            all_passed = True
+            for idx, rule in enumerate(rules):
+                rule_key = f"entry_{idx}"
+                if not self._evaluate_rule(rule, closes, sym_state, rule_key, last_candle_time):
+                    all_passed = False
+                    break
+
+            if all_passed:
+                qty = max(1, int(p.get("quantity") or 100))
+
+                side = "BUY"
+                reason = self._risk_reject_reason(sym, qty, bar.close, is_strategy=True)
+                if reason:
+                    self._order(sym, side, "MARKET", qty, bar.close, "REJECTED", s["id"], reason)
+                    self.alert("warn", f"{s['name']}: {sym} {side} rejected: {reason}")
+                    continue
+
+                fill = self.broker.execute_market(sym, side, qty, bar.close)
+                sl_pct = float(p.get("stopLossPercent") or p.get("stopLoss") or 1.0)
+                target_pct = float(p.get("targetPercent") or p.get("targetProfit") or 2.0)
+
+                self._open_position(
+                    sym, side, qty, fill.price, s["id"],
+                    f"Custom Rule Entry: {rules[0].get('indicator')} {rules[0].get('operator')} {rules[0].get('value')}",
+                    sl_pct=sl_pct, target_pct=target_pct,
+                )
+                self.alert("info", f"{s['name']} triggered: {side} {qty} {sym} @ {fill.price:.2f}")
 
     def _run_orb(self, s: dict, tick: FeedTick) -> None:
         """Opening range breakout.
@@ -536,11 +820,14 @@ class TradingEngine:
                 continue
             if not d["armed"] or d["trades"] >= int(p["maxTradesPerStock"]):
                 continue
-            qty = int(p["perTradeAmount"] // bar.close)
+            if p.get("quantity"):
+                qty = max(1, int(p["quantity"]))
+            else:
+                qty = max(1, int(p.get("perTradeAmount", 150000) // bar.close))
             if qty < 1:
                 continue
             side = "BUY" if bar.close > d["high"] else "SELL"
-            reason = self._risk_reject_reason(sym, qty, bar.close)
+            reason = self._risk_reject_reason(sym, qty, bar.close, is_strategy=True)
             if reason:
                 d["armed"] = False
                 self._order(sym, side, "MARKET", qty, bar.close, "REJECTED", s["id"], reason)
@@ -565,6 +852,39 @@ class TradingEngine:
             for p in self.positions
         ]
         orders = [{k: v for k, v in o.items() if k != "_seq"} for o in self.db.recent_orders(200)]
+
+        enhanced_strategies = []
+        for s in self.strategies:
+            strat_copy = dict(s)
+            sym = strat_copy.get("instrument", "NIFTY 50")
+            clean_sym = sym.replace(" FUT", "").strip()
+            ltp = self.prices.get(clean_sym) or self.prices.get(sym, 0.0)
+            strat_copy["currentPrice"] = ltp
+            rules = s.get("entryRules") or []
+            if rules:
+                rule0 = rules[0]
+                left_ind = rule0.get("indicator", "EMA 9")
+                right_ind = rule0.get("value", "EMA 25")
+                tf = s.get("timeframe", "5m")
+                candles = self._get_candles(clean_sym, tf)
+                if candles:
+                    closes = [c["close"] for c in candles]
+                    l_val = self._calculate_indicator(left_ind, candles)
+                    r_val = self._calculate_indicator(right_ind, candles)
+                    strat_state = self.orb.get(s["id"], {}).get(clean_sym, {})
+                    is_armed = strat_state.get("entry_0", {}).get("armed", True)
+                    strat_copy["liveIndicators"] = {
+                        "leftName": left_ind,
+                        "leftValue": l_val,
+                        "rightName": right_ind,
+                        "rightValue": r_val,
+                        "operator": rule0.get("operator", "crosses above"),
+                        "lastCandleTime": str(candles[-1].get("time", "")),
+                        "candleClose": closes[-1] if closes else ltp,
+                        "armed": is_armed,
+                    }
+            enhanced_strategies.append(strat_copy)
+
         return {
             "mode": self.mode,
             "liveEnabled": self.live_enabled,
@@ -573,7 +893,7 @@ class TradingEngine:
             "marketTime": self.market_time.strftime("%H:%M:%S"),
             "marketDate": self.market_date,
             "prices": self.prices,
-            "strategies": self.strategies,
+            "strategies": enhanced_strategies,
             "positions": positions,
             "orders": orders,
             "closed": self.db.recent_trades(200),

@@ -1,37 +1,94 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import {
   BarChart3,
   FunctionSquare,
   Maximize2,
   Minus,
-  MoreVertical,
   Plus,
   Search,
   Settings,
-  SlidersHorizontal,
   Star,
+  Trash2,
+  TrendingUp,
+  X,
 } from "lucide-react";
 import { useTerminal, pnlOf } from "@/lib/terminal/store";
 import { inr, num, pnlColor, signed } from "@/lib/terminal/format";
-import { PRICE_BOOK, SYMBOLS } from "@/lib/terminal/mock";
 import { Empty, Select } from "@/components/terminal";
 import type { Side } from "@/lib/terminal/types";
 import { LightweightChart } from "@/components/terminal";
 
-const card = "bg-white border border-slate-100 shadow-sm rounded-xl overflow-hidden";
+const card = "bg-white border border-slate-200 shadow-sm rounded-xl";
 const field =
   "w-full bg-white border border-slate-200 rounded-md px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-blue-500";
 const label = "block text-[11px] font-medium text-slate-500 mb-1";
 
-function useQuote(symbol: string) {
-  const t = useTerminal();
-  const ltp = t.prices[symbol] ?? 0;
-  const base = PRICE_BOOK[symbol] ?? ltp;
-  const chg = ltp && base ? ltp - base : 0;
-  const pct = base ? (chg / base) * 100 : 0;
-  return { ltp, chg, pct };
+const DEFAULT_WATCHLIST = [
+  "NIFTY 50",
+  "BANKNIFTY",
+  "FINNIFTY",
+  "RELIANCE",
+  "TCS",
+  "HDFCBANK",
+  "INFY",
+  "ICICIBANK",
+  "SBIN",
+  "TATAMOTORS",
+];
+
+const ALL_POPULAR_STOCKS = [
+  { symbol: "NIFTY 50", name: "Nifty 50 Index", exchange: "NSE" },
+  { symbol: "BANKNIFTY", name: "Nifty Bank Index", exchange: "NSE" },
+  { symbol: "FINNIFTY", name: "Nifty Financial Services", exchange: "NSE" },
+  { symbol: "SENSEX", name: "BSE Sensex Index", exchange: "BSE" },
+  { symbol: "RELIANCE", name: "Reliance Industries Ltd", exchange: "NSE" },
+  { symbol: "TCS", name: "Tata Consultancy Services", exchange: "NSE" },
+  { symbol: "HDFCBANK", name: "HDFC Bank Ltd", exchange: "NSE" },
+  { symbol: "INFY", name: "Infosys Ltd", exchange: "NSE" },
+  { symbol: "ICICIBANK", name: "ICICI Bank Ltd", exchange: "NSE" },
+  { symbol: "SBIN", name: "State Bank of India", exchange: "NSE" },
+  { symbol: "BHARTIARTL", name: "Bharti Airtel Ltd", exchange: "NSE" },
+  { symbol: "ITC", name: "ITC Ltd", exchange: "NSE" },
+  { symbol: "KOTAKBANK", name: "Kotak Mahindra Bank", exchange: "NSE" },
+  { symbol: "LT", "name": "Larsen & Toubro Ltd", exchange: "NSE" },
+  { symbol: "AXISBANK", name: "Axis Bank Ltd", exchange: "NSE" },
+  { symbol: "TATAMOTORS", name: "Tata Motors Ltd", exchange: "NSE" },
+  { symbol: "MARUTI", name: "Maruti Suzuki India", exchange: "NSE" },
+  { symbol: "SUNPHARMA", name: "Sun Pharmaceutical", exchange: "NSE" },
+  { symbol: "BAJFINANCE", name: "Bajaj Finance Ltd", exchange: "NSE" },
+  { symbol: "TITAN", name: "Titan Company Ltd", exchange: "NSE" },
+  { symbol: "WIPRO", name: "Wipro Ltd", exchange: "NSE" },
+  { symbol: "TATASTEEL", name: "Tata Steel Ltd", exchange: "NSE" },
+  { symbol: "POWERGRID", name: "Power Grid Corporation", exchange: "NSE" },
+  { symbol: "NTPC", name: "NTPC Ltd", exchange: "NSE" },
+  { symbol: "ULTRACEMCO", name: "UltraTech Cement", exchange: "NSE" },
+  { symbol: "ADANIENT", name: "Adani Enterprises", exchange: "NSE" },
+  { symbol: "ADANIPORTS", name: "Adani Ports & SEZ", exchange: "NSE" },
+  { symbol: "ASIANPAINT", name: "Asian Paints Ltd", exchange: "NSE" },
+  { symbol: "HCLTECH", name: "HCL Technologies", exchange: "NSE" },
+  { symbol: "BAJAJFINSV", name: "Bajaj Finserv Ltd", exchange: "NSE" },
+  { symbol: "NESTLEIND", name: "Nestle India Ltd", exchange: "NSE" },
+  { symbol: "COALINDIA", name: "Coal India Ltd", exchange: "NSE" },
+  { symbol: "ONGC", name: "Oil & Natural Gas Corp", exchange: "NSE" },
+  { symbol: "JSWSTEEL", name: "JSW Steel Ltd", exchange: "NSE" },
+  { symbol: "TRENT", name: "Trent Ltd", exchange: "NSE" },
+  { symbol: "BEL", name: "Bharat Electronics Ltd", exchange: "NSE" },
+  { symbol: "HAL", name: "Hindustan Aeronautics", exchange: "NSE" },
+  { symbol: "M&M", name: "Mahindra & Mahindra", exchange: "NSE" },
+  { symbol: "TECHM", name: "Tech Mahindra Ltd", exchange: "NSE" },
+  { symbol: "EICHERMOT", name: "Eicher Motors Ltd", exchange: "NSE" },
+  { symbol: "CIPLA", name: "Cipla Ltd", exchange: "NSE" },
+  { symbol: "DRREDDY", name: "Dr. Reddy's Laboratories", exchange: "NSE" },
+];
+
+interface QuoteData {
+  ltp: number;
+  chg: number;
+  pct: number;
+  high?: number;
+  low?: number;
 }
 
 function ChangeText({
@@ -54,60 +111,127 @@ function ChangeText({
 
 /* ----------------------------------------------------------------- Watchlist */
 
-const WL_TABS = ["Watchlist", "Futures", "Equity"] as const;
+const WL_TABS = ["All", "Indices", "Equities"] as const;
 
-function WatchRow({ s, active, onSelect }: { s: string; active: boolean; onSelect: () => void }) {
-  const q = useQuote(s);
-  return (
-    <tr
-      onClick={onSelect}
-      className={`cursor-pointer ${active ? "bg-blue-50/60" : "hover:bg-slate-50"}`}
-    >
-      <td className="px-3 py-1.5">
-        <div className="flex items-center gap-2">
-          <Star
-            className={`w-3.5 h-3.5 ${active ? "text-amber-400 fill-amber-400" : "text-slate-300"}`}
-          />
-          <div>
-            <div className="text-xs font-semibold text-slate-900">{s}</div>
-            <div className="text-[10px] text-slate-400">NSE</div>
-          </div>
-        </div>
-      </td>
-      <td className="px-3 py-1.5 text-right mono-nums text-xs text-slate-800">{num(q.ltp)}</td>
-      <td className="px-3 py-1.5 text-right mono-nums text-[11px]">
-        <ChangeText chg={q.chg} pct={q.pct} />
-      </td>
-      <td className="pr-2 py-1.5 text-right">
-        <MoreVertical className="w-3.5 h-3.5 text-slate-400 inline" />
-      </td>
-    </tr>
-  );
-}
-
-function Watchlist({ selected, onSelect }: { selected: string; onSelect: (s: string) => void }) {
+function Watchlist({
+  selected,
+  onSelect,
+  quotes,
+  watchlist,
+  onAddStock,
+  onRemoveStock,
+}: {
+  selected: string;
+  onSelect: (s: string) => void;
+  quotes: Record<string, QuoteData>;
+  watchlist: string[];
+  onAddStock: (s: string) => void;
+  onRemoveStock: (s: string) => void;
+}) {
   const [q, setQ] = useState("");
-  const [tab, setTab] = useState<(typeof WL_TABS)[number]>("Watchlist");
-  const list = SYMBOLS.filter((s) => s.toLowerCase().includes(q.toLowerCase())).filter((s) =>
-    tab === "Futures" ? s.endsWith("FUT") : tab === "Equity" ? !s.endsWith("FUT") : true
-  );
+  const [tab, setTab] = useState<(typeof WL_TABS)[number]>("All");
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const searchBoxRef = useRef<HTMLDivElement>(null);
+
+  // Filter existing watchlist by tab & query
+  const filteredList = useMemo(() => {
+    return watchlist.filter((s) => {
+      const matchQ = s.toLowerCase().includes(q.toLowerCase());
+      const isIndex = ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"].some((idx) =>
+        s.toUpperCase().includes(idx)
+      );
+      if (tab === "Indices") return matchQ && isIndex;
+      if (tab === "Equities") return matchQ && !isIndex;
+      return matchQ;
+    });
+  }, [watchlist, q, tab]);
+
+  // Search candidate suggestions to ADD
+  const searchSuggestions = useMemo(() => {
+    if (!q.trim()) return [];
+    const qLower = q.toLowerCase();
+    return ALL_POPULAR_STOCKS.filter(
+      (item) =>
+        (item.symbol.toLowerCase().includes(qLower) ||
+          item.name.toLowerCase().includes(qLower)) &&
+        !watchlist.includes(item.symbol)
+    ).slice(0, 8);
+  }, [q, watchlist]);
+
+  // Close search dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
+        setShowSearchDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   return (
-    <section className={`${card} flex flex-col min-h-0 flex-1`}>
-      <div className="p-3 flex items-center gap-2">
-        <div className="flex-1 flex items-center gap-2 bg-slate-50 border border-slate-100 rounded-md px-2.5 py-1.5">
-          <Search className="w-3.5 h-3.5 text-slate-400" />
+    <section className={`${card} flex flex-col min-h-0 flex-1 relative`}>
+      {/* Search Header */}
+      <div className="p-3 relative z-30" ref={searchBoxRef}>
+        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus-within:border-blue-500 focus-within:bg-white shadow-sm transition-all">
+          <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search symbol (e.g. NIFTY, RELIANCE)"
+            onChange={(e) => {
+              setQ(e.target.value);
+              setShowSearchDropdown(true);
+            }}
+            onFocus={() => setShowSearchDropdown(true)}
+            placeholder="Search stock to add (e.g. RELIANCE, TCS)..."
             className="flex-1 bg-transparent text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none"
           />
+          {q && (
+            <button
+              onClick={() => {
+                setQ("");
+                setShowSearchDropdown(false);
+              }}
+              className="text-slate-400 hover:text-slate-600"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
-        <button className="p-1.5 rounded-md border border-slate-200 text-slate-500 hover:bg-slate-50">
-          <SlidersHorizontal className="w-3.5 h-3.5" />
-        </button>
+
+        {/* Search Results Dropdown to Add to Watchlist */}
+        {showSearchDropdown && searchSuggestions.length > 0 && (
+          <div className="absolute top-full left-3 right-3 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden z-50 divide-y divide-slate-100 max-h-60 overflow-y-auto animate-in fade-in">
+            <div className="px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50">
+              Add to Watchlist
+            </div>
+            {searchSuggestions.map((item) => (
+              <div
+                key={item.symbol}
+                className="px-3 py-2 flex items-center justify-between hover:bg-blue-50/60 transition-colors"
+              >
+                <div>
+                  <div className="text-xs font-bold text-slate-900">{item.symbol}</div>
+                  <div className="text-[10px] text-slate-500 truncate max-w-[180px]">
+                    {item.name} · {item.exchange}
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    onAddStock(item.symbol);
+                    setQ("");
+                    setShowSearchDropdown(false);
+                  }}
+                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-semibold flex items-center gap-1 shadow-sm transition-colors"
+                >
+                  <Plus className="w-3 h-3" /> Add
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Tabs */}
       <div className="px-3 flex gap-4 border-b border-slate-100 text-xs font-semibold shrink-0">
         {WL_TABS.map((k) => (
           <button
@@ -124,23 +248,76 @@ function Watchlist({ selected, onSelect }: { selected: string; onSelect: (s: str
           </button>
         ))}
       </div>
+
+      {/* Watchlist Table */}
       <div className="flex-1 overflow-y-auto min-h-0">
         <table className="w-full">
-          <thead className="bg-slate-50/80 sticky top-0">
+          <thead className="bg-slate-50/80 sticky top-0 z-10">
             <tr className="text-[11px] text-slate-500">
               <th className="px-3 py-1.5 text-left font-medium">Symbol</th>
               <th className="px-3 py-1.5 text-right font-medium">LTP</th>
               <th className="px-3 py-1.5 text-right font-medium">Change %</th>
-              <th />
+              <th className="w-8" />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
-            {list.map((s) => (
-              <WatchRow key={s} s={s} active={s === selected} onSelect={() => onSelect(s)} />
-            ))}
+            {filteredList.map((s) => {
+              const qData = quotes[s] || { ltp: 0, chg: 0, pct: 0 };
+              const active = s === selected;
+              return (
+                <tr
+                  key={s}
+                  onClick={() => onSelect(s)}
+                  className={`group cursor-pointer transition-colors ${
+                    active ? "bg-blue-50/70" : "hover:bg-slate-50"
+                  }`}
+                >
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <Star
+                        className={`w-3.5 h-3.5 shrink-0 ${
+                          active ? "text-amber-400 fill-amber-400" : "text-slate-300"
+                        }`}
+                      />
+                      <div>
+                        <div className="text-xs font-bold text-slate-900">{s}</div>
+                        <div className="text-[10px] text-slate-400">NSE</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right mono-nums text-xs font-semibold text-slate-800">
+                    {qData.ltp ? num(qData.ltp) : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right mono-nums text-[11px]">
+                    {qData.ltp ? (
+                      <ChangeText chg={qData.chg} pct={qData.pct} />
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
+                  <td className="pr-2 py-2 text-right">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveStock(s);
+                      }}
+                      title={`Remove ${s} from watchlist`}
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded transition-all"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
-        {list.length === 0 && <Empty text="No symbols match" />}
+        {filteredList.length === 0 && (
+          <div className="p-8 text-center">
+            <Empty text="No stocks found in this tab" />
+            <p className="text-[11px] text-slate-400 mt-1">Use the search box above to add stocks.</p>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -148,9 +325,18 @@ function Watchlist({ selected, onSelect }: { selected: string; onSelect: (s: str
 
 /* -------------------------------------------------------------- Order ticket */
 
-function OrderTicket({ symbol, onSymbol }: { symbol: string; onSymbol: (s: string) => void }) {
+function OrderTicket({
+  symbol,
+  onSymbol,
+  quote,
+  watchlist,
+}: {
+  symbol: string;
+  onSymbol: (s: string) => void;
+  quote: QuoteData;
+  watchlist: string[];
+}) {
   const t = useTerminal();
-  const quote = useQuote(symbol);
   const [side, setSide] = useState<Side>("BUY");
   const [qty, setQty] = useState(1);
   const [type, setType] = useState<"MARKET" | "LIMIT">("MARKET");
@@ -178,7 +364,7 @@ function OrderTicket({ symbol, onSymbol }: { symbol: string; onSymbol: (s: strin
   };
 
   return (
-    <section className={`${card} shrink-0`}>
+    <section className={`${card} shrink-0 relative z-30`}>
       <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
         <h3 className="text-xs font-bold text-slate-800">Order Ticket</h3>
         <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-blue-50 text-blue-600">
@@ -191,17 +377,22 @@ function OrderTicket({ symbol, onSymbol }: { symbol: string; onSymbol: (s: strin
           <div className="relative">
             <Select
               variant="transparent"
+              searchable
               value={symbol}
               onChange={onSymbol}
-              options={SYMBOLS.map((s) => ({ value: s, label: s }))}
+              options={watchlist.map((s) => ({ value: s, label: s }))}
             />
             <div className="text-[10px] text-slate-400 mt-0.5">
-              NSE · {product} · {symbol.endsWith("FUT") ? "Future" : "Equity"}
+              NSE · {product} · {symbol.includes("NIFTY") ? "Index" : "Equity"}
             </div>
           </div>
           <div className="text-right">
-            <div className="mono-nums text-[13px] font-bold text-slate-900">{num(quote.ltp)}</div>
-            <ChangeText chg={quote.chg} pct={quote.pct} className="mono-nums text-[11px]" />
+            <div className="mono-nums text-[13px] font-bold text-slate-900">
+              {quote.ltp ? num(quote.ltp) : "—"}
+            </div>
+            {quote.ltp > 0 && (
+              <ChangeText chg={quote.chg} pct={quote.pct} className="mono-nums text-[11px]" />
+            )}
           </div>
         </div>
 
@@ -330,61 +521,87 @@ function OrderTicket({ symbol, onSymbol }: { symbol: string; onSymbol: (s: strin
 
 /* --------------------------------------------------------------------- Chart */
 
-const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "D", "W", "M"];
+const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "D"];
 
-function ChartPanel({ symbol, onSymbol }: { symbol: string; onSymbol: (s: string) => void }) {
-  const quote = useQuote(symbol);
-  const [tf, setTf] = useState("1m");
+function ChartPanel({
+  symbol,
+  onSymbol,
+  quote,
+  watchlist,
+}: {
+  symbol: string;
+  onSymbol: (s: string) => void;
+  quote: QuoteData;
+  watchlist: string[];
+}) {
+  const [tf, setTf] = useState("5m");
 
   return (
-    <section className={`${card} flex flex-col min-h-0`} style={{ flex: 2.5, minHeight: "380px" }}>
-      <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-3 shrink-0">
-        <div className="bg-blue-50 p-1 rounded-md">
-          <BarChart3 className="w-4 h-4 text-blue-600" />
+    <section className={`${card} flex flex-col min-h-0`} style={{ flex: 2.5, minHeight: "400px" }}>
+      <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-50 p-1.5 rounded-lg">
+            <BarChart3 className="w-4 h-4 text-blue-600" />
+          </div>
+          <div className="relative">
+            <Select
+              variant="transparent"
+              searchable
+              value={symbol}
+              onChange={onSymbol}
+              options={watchlist.map((s) => ({ value: s, label: s }))}
+            />
+          </div>
+          <span className="mono-nums text-sm font-bold text-slate-900">
+            {quote.ltp ? num(quote.ltp) : "—"}
+          </span>
+          {quote.ltp > 0 && (
+            <ChangeText chg={quote.chg} pct={quote.pct} className="mono-nums text-xs font-semibold" />
+          )}
         </div>
-        <div className="relative">
-          <Select
-            variant="transparent"
-            value={symbol}
-            onChange={onSymbol}
-            options={SYMBOLS.map((s) => ({ value: s, label: s }))}
-          />
+
+        <div className="flex items-center gap-2">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            Real Market Data
+          </div>
         </div>
-        <span className="mono-nums text-xs font-semibold text-slate-800">{num(quote.ltp)}</span>
-        <ChangeText chg={quote.chg} pct={quote.pct} className="mono-nums text-xs font-semibold" />
       </div>
 
-      <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between shrink-0">
-        <div className="flex gap-0.5 bg-slate-50 rounded-md p-0.5 text-[11px] font-semibold">
+      <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50/50">
+        <div className="flex gap-1 bg-white border border-slate-200 rounded-md p-0.5 text-[11px] font-semibold">
           {TIMEFRAMES.map((k) => (
             <button
               key={k}
               onClick={() => setTf(k)}
-              className={`px-2.5 py-0.5 rounded ${tf === k ? "bg-blue-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+              className={`px-2.5 py-0.5 rounded transition-colors ${
+                tf === k ? "bg-blue-600 text-white shadow-sm" : "text-slate-500 hover:bg-slate-100"
+              }`}
             >
               {k}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-3 text-slate-500">
-          <button className="flex items-center gap-1 text-[11px] font-semibold hover:text-slate-900">
-            <FunctionSquare className="w-3.5 h-3.5" /> Indicators
-          </button>
-          <button className="hover:text-slate-900">
-            <Maximize2 className="w-3.5 h-3.5" />
-          </button>
-          <button className="hover:text-slate-900">
-            <Settings className="w-3.5 h-3.5" />
-          </button>
+        <div className="flex items-center gap-3 text-slate-500 text-xs">
+          {quote.high && (
+            <span>
+              High: <strong className="text-slate-800">{num(quote.high)}</strong>
+            </span>
+          )}
+          {quote.low && (
+            <span>
+              Low: <strong className="text-slate-800">{num(quote.low)}</strong>
+            </span>
+          )}
         </div>
       </div>
 
       <div className="px-2 pt-2 flex-1 min-h-0 flex flex-col">
         <div className="px-2 pb-1 text-[11px] text-slate-500 shrink-0">
-          <span className="font-semibold text-slate-700">{symbol}</span> · {tf} · NSE
+          <span className="font-semibold text-slate-800">{symbol}</span> · {tf} · NSE Live Candles
         </div>
         <div className="flex-1 min-h-0">
-          <LightweightChart key={symbol} symbol={symbol} height={undefined} />
+          <LightweightChart key={`${symbol}-${tf}`} symbol={symbol} height={undefined} />
         </div>
       </div>
     </section>
@@ -558,7 +775,81 @@ function OrderBook() {
 /* ---------------------------------------------------------------------- Page */
 
 export default function Trading() {
-  const [symbol, setSymbol] = useState(SYMBOLS[0]);
+  const [watchlist, setWatchlist] = useState<string[]>(DEFAULT_WATCHLIST);
+  const [symbol, setSymbol] = useState("NIFTY 50");
+  const [quotes, setQuotes] = useState<Record<string, QuoteData>>({});
+
+  // Load custom watchlist from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("algo_user_watchlist");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setWatchlist(parsed);
+          setSymbol(parsed[0]);
+        }
+      }
+    } catch {
+      // fallback to default
+    }
+  }, []);
+
+  // Save watchlist to localStorage whenever it changes
+  const saveWatchlist = (updated: string[]) => {
+    setWatchlist(updated);
+    try {
+      localStorage.setItem("algo_user_watchlist", JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleAddStock = (s: string) => {
+    if (!watchlist.includes(s)) {
+      const updated = [s, ...watchlist];
+      saveWatchlist(updated);
+      setSymbol(s);
+    }
+  };
+
+  const handleRemoveStock = (s: string) => {
+    const updated = watchlist.filter((item) => item !== s);
+    saveWatchlist(updated);
+    if (symbol === s && updated.length > 0) {
+      setSymbol(updated[0]);
+    }
+  };
+
+  // Poll real-time quotes every 4 seconds for watchlist stocks
+  useEffect(() => {
+    let active = true;
+
+    const fetchQuotes = async () => {
+      if (watchlist.length === 0) return;
+      try {
+        const query = watchlist.slice(0, 15).join(",");
+        const res = await fetch(`http://localhost:8001/api/v1/quotes?symbols=${encodeURIComponent(query)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (active && data.quotes) {
+            setQuotes((prev) => ({ ...prev, ...data.quotes }));
+          }
+        }
+      } catch {
+        // ignore network error
+      }
+    };
+
+    fetchQuotes();
+    const interval = setInterval(fetchQuotes, 4000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [watchlist]);
+
+  const currentQuote = quotes[symbol] || { ltp: 0, chg: 0, pct: 0 };
 
   return (
     <div
@@ -567,13 +858,30 @@ export default function Trading() {
     >
       {/* 30% column: Watchlist & Order Ticket */}
       <div className="flex flex-col gap-4 min-w-0 min-h-0 h-full">
-        <Watchlist selected={symbol} onSelect={setSymbol} />
-        <OrderTicket symbol={symbol} onSymbol={setSymbol} />
+        <Watchlist
+          selected={symbol}
+          onSelect={setSymbol}
+          quotes={quotes}
+          watchlist={watchlist}
+          onAddStock={handleAddStock}
+          onRemoveStock={handleRemoveStock}
+        />
+        <OrderTicket
+          symbol={symbol}
+          onSymbol={setSymbol}
+          quote={currentQuote}
+          watchlist={watchlist}
+        />
       </div>
 
       {/* 70% column: Chart & Order Book */}
       <div className="flex flex-col gap-4 min-w-0 min-h-0 h-full">
-        <ChartPanel symbol={symbol} onSymbol={setSymbol} />
+        <ChartPanel
+          symbol={symbol}
+          onSymbol={setSymbol}
+          quote={currentQuote}
+          watchlist={watchlist}
+        />
         <OrderBook />
       </div>
     </div>

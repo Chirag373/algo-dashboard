@@ -13,11 +13,11 @@ export function Panel({
 }) {
   return (
     <section
-      className={`bg-white border border-slate-100 shadow-sm rounded-xl overflow-hidden ${className}`}
+      className={`bg-white shadow-[0_1px_3px_0_rgba(60,64,67,0.08),0_4px_8px_3px_rgba(60,64,67,0.04)] rounded-2xl ${className}`}
     >
       {title && (
-        <div className="px-4 py-2.5 border-b border-slate-50 flex items-center justify-between">
-          <h2 className="text-[13px] font-bold text-slate-800 flex items-center gap-2">{title}</h2>
+        <div className="px-6 py-4 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">{title}</h2>
           {right}
         </div>
       )}
@@ -40,14 +40,14 @@ export function Stat({
   icon?: React.ReactNode;
 }) {
   return (
-    <div className="bg-white border border-slate-100 shadow-sm rounded-xl px-4 py-3 flex gap-3 items-center">
+    <div className="bg-white shadow-[0_1px_3px_0_rgba(60,64,67,0.08),0_4px_8px_3px_rgba(60,64,67,0.04)] rounded-2xl px-5 py-4 flex gap-3.5 items-center">
       {icon && (
-        <div className="w-9 h-9 rounded-lg bg-slate-50 flex items-center justify-center shrink-0">
+        <div className="w-10 h-10 rounded-xl bg-slate-100/80 flex items-center justify-center shrink-0">
           {icon}
         </div>
       )}
       <div>
-        <div className="text-[13px] font-medium text-slate-500 flex items-center gap-1">
+        <div className="text-xs font-medium text-slate-500 flex items-center gap-1">
           {label}
         </div>
         <div className={`mono-nums text-lg font-bold leading-tight ${tone}`}>{value}</div>
@@ -74,7 +74,7 @@ export function Badge({
   };
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold tracking-wide uppercase ${map[tone]}`}
+      className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold tracking-wide uppercase ${map[tone]}`}
     >
       {children}
     </span>
@@ -82,20 +82,20 @@ export function Badge({
 }
 
 export function Empty({ text }: { text: string }) {
-  return <div className="px-4 py-6 text-center text-xs text-slate-400 font-medium">{text}</div>;
+  return <div className="px-4 py-8 text-center text-xs text-slate-400 font-medium">{text}</div>;
 }
 
-export const th = "px-4 py-2 font-medium text-left whitespace-nowrap text-slate-500 text-[11px]";
-export const thr = "px-4 py-2 font-medium text-right whitespace-nowrap text-slate-500 text-[11px]";
-export const td = "px-4 py-2 whitespace-nowrap text-xs text-slate-700";
-export const tdr = "px-4 py-2 text-right mono-nums whitespace-nowrap text-xs text-slate-700";
+export const th = "px-5 py-3 font-semibold text-left whitespace-nowrap text-slate-500 text-xs";
+export const thr = "px-5 py-3 font-semibold text-right whitespace-nowrap text-slate-500 text-xs";
+export const td = "px-5 py-3.5 whitespace-nowrap text-xs text-slate-700";
+export const tdr = "px-5 py-3.5 text-right mono-nums whitespace-nowrap text-xs text-slate-700";
 export const inputCls =
-  "w-full bg-white border border-slate-200 rounded-md px-3 py-2 text-sm text-slate-800 focus:outline-none focus:border-blue-500";
+  "w-full bg-slate-100/80 hover:bg-slate-100 focus:bg-white focus:ring-2 focus:ring-blue-600 rounded-xl px-4 py-2.5 text-sm text-slate-800 transition-all outline-none border-none";
 export const btn =
-  "px-3 py-1.5 rounded-md text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
+  "px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
 
 import { useState, useRef, useEffect } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Check, Search } from "lucide-react";
 
 export function Select({
   value,
@@ -104,15 +104,21 @@ export function Select({
   className = "",
   variant = "default",
   size = "default",
+  searchable = false,
+  placeholder = "Select...",
 }: {
   value: string;
   onChange: (val: string) => void;
   options: { label: React.ReactNode; value: string }[];
   className?: string;
-  variant?: "default" | "transparent";
+  variant?: "default" | "transparent" | "outline";
   size?: "default" | "sm";
+  searchable?: boolean;
+  placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [openUpward, setOpenUpward] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -125,53 +131,105 @@ export function Select({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      if (spaceBelow < 260 && rect.top > 260) {
+        setOpenUpward(true);
+      } else {
+        setOpenUpward(false);
+      }
+    }
+  }, [open]);
+
   const selected = options.find((o) => o.value === value);
+  const shouldSearch = searchable || options.length >= 8;
+
+  const filteredOptions = shouldSearch && query.trim()
+    ? options.filter((o) => {
+        const text = typeof o.label === "string" ? o.label : o.value;
+        return text.toLowerCase().includes(query.toLowerCase()) || o.value.toLowerCase().includes(query.toLowerCase());
+      })
+    : options;
 
   return (
     <div ref={ref} className={`relative ${className}`}>
       <div
-        className={`w-full flex items-center justify-between cursor-pointer ${
-          variant === "default"
-            ? size === "sm"
-              ? "bg-white border border-slate-200 rounded-md px-2.5 py-1.5 text-xs text-slate-800 shadow-sm focus:border-blue-500 hover:border-slate-300"
-              : "bg-white border border-slate-200 rounded-md px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 hover:border-slate-300"
-            : "bg-transparent text-[13px] font-bold text-slate-900"
+        className={`w-full flex items-center justify-between cursor-pointer transition-all ${
+          variant === "transparent"
+            ? "bg-transparent text-[13px] font-bold text-slate-900 hover:text-blue-600"
+            : size === "sm"
+            ? "bg-white border border-slate-200 hover:border-slate-300 rounded-lg px-3 py-1.5 text-xs font-medium text-slate-800 shadow-2xs"
+            : "bg-white border border-slate-200 hover:border-slate-300 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-900 shadow-2xs"
         }`}
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          setOpen(!open);
+          if (!open) setQuery("");
+        }}
       >
-        <span className="truncate">{selected ? selected.label : value}</span>
+        <span className="truncate">{selected ? selected.label : (value || placeholder)}</span>
         <ChevronDown
-          className={`shrink-0 ml-2 ${
-            variant === "default"
+          className={`shrink-0 ml-2 transition-transform duration-200 ${
+            open ? "rotate-180" : ""
+          } ${
+            variant === "outline" || variant === "default"
               ? size === "sm"
-                ? "w-3 h-3 text-slate-400"
-                : "w-4 h-4 text-slate-400"
+                ? "w-3.5 h-3.5 text-slate-500"
+                : "w-4 h-4 text-slate-500"
               : "w-3.5 h-3.5 text-slate-600"
           }`}
         />
       </div>
       {open && (
         <div
-          className={`absolute z-[99] mt-1 w-full bg-white border border-slate-200 rounded-md shadow-lg max-h-60 overflow-y-auto ${
-            variant === "transparent" ? "min-w-[120px] left-0" : ""
+          className={`absolute z-[9999] ${
+            openUpward ? "bottom-full mb-2" : "top-full mt-2"
+          } bg-white rounded-xl shadow-[0_12px_36px_rgba(0,0,0,0.14)] p-1.5 border border-slate-200 max-h-60 overflow-y-auto custom-scrollbar ${
+            variant === "transparent" ? "min-w-[220px] left-0" : "w-full min-w-[180px] left-0"
           }`}
         >
-          {options.map((opt) => (
-            <div
-              key={opt.value}
-              className={`${
-                size === "sm" ? "px-2.5 py-1.5 text-xs" : "px-3 py-2 text-sm"
-              } cursor-pointer hover:bg-slate-50 transition-colors ${
-                opt.value === value ? "bg-blue-50 text-blue-700 font-medium" : "text-slate-700"
-              }`}
-              onClick={() => {
-                onChange(opt.value);
-                setOpen(false);
-              }}
-            >
-              {opt.label}
+          {shouldSearch && (
+            <div className="p-1.5 pb-2 sticky top-0 bg-white z-10 border-b border-slate-100 mb-1">
+              <div className="relative flex items-center">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" />
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Search..."
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-100 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 border-none"
+                />
+              </div>
             </div>
-          ))}
+          )}
+          {filteredOptions.length === 0 ? (
+            <div className="p-3 text-xs text-slate-400 text-center">No options found</div>
+          ) : (
+            filteredOptions.map((opt) => (
+              <div
+                key={opt.value}
+                className={`${
+                  size === "sm" ? "px-3 py-1.5 text-xs" : "px-3 py-2 text-xs"
+                } cursor-pointer rounded-lg hover:bg-slate-100 transition-colors flex items-center justify-between gap-2 ${
+                  opt.value === value
+                    ? "bg-blue-50 text-blue-600 font-bold"
+                    : "text-slate-700 font-medium"
+                }`}
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+              >
+                <span className="truncate">{opt.label}</span>
+                {opt.value === value && (
+                  <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                )}
+              </div>
+            ))
+          )}
         </div>
       )}
     </div>

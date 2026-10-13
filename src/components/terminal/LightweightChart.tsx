@@ -34,6 +34,8 @@ export function LightweightChart({ symbol, height }: LightweightChartProps) {
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
+    let isMounted = true;
+
     const chart = createChart(chartContainerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: "transparent" },
@@ -66,30 +68,54 @@ export function LightweightChart({ symbol, height }: LightweightChartProps) {
     seriesRef.current = series;
 
     // Fetch history
-    api<CandleBar[]>("GET", `/history/${symbol}`)
-      .then((data) => {
-        if (data.length > 0) {
-          const formatted = data.map((bar) => ({
-            time: bar.time,
-            open: bar.open,
-            high: bar.high,
-            low: bar.low,
-            close: bar.close,
-          }));
-          series.setData(formatted);
-          if (formatted.length > 0) {
-            lastTimeRef.current = formatted[formatted.length - 1].time as number;
+    api<any>("GET", `/history/${encodeURIComponent(symbol)}`)
+      .then((res) => {
+        if (!isMounted || !chartRef.current || !seriesRef.current) return;
+        const rawBars = Array.isArray(res) ? res : (res?.data || []);
+        if (rawBars.length > 0) {
+          const formatted = rawBars
+            .map((bar: any) => {
+              let t = bar.time;
+              if (typeof t === "string") {
+                const ts = Math.floor(
+                  Date.parse(t.includes("T") ? t : t.replace(" ", "T")) / 1000
+                );
+                if (!isNaN(ts)) t = ts;
+              }
+              return {
+                time: t as Time,
+                open: Number(bar.open),
+                high: Number(bar.high),
+                low: Number(bar.low),
+                close: Number(bar.close),
+              };
+            })
+            .sort((a: any, b: any) => (a.time > b.time ? 1 : -1))
+            .filter((b: any, idx: number, arr: any[]) => idx === 0 || b.time > arr[idx - 1].time);
+
+          if (formatted.length > 0 && isMounted && seriesRef.current) {
+            try {
+              series.setData(formatted);
+              lastTimeRef.current = formatted[formatted.length - 1].time as number;
+            } catch {
+              // Ignore if already disposed
+            }
           }
         }
       })
-      .catch(console.error);
+      .catch((err) => {
+        if (isMounted) console.error(err);
+      });
 
     const handleResize = () => {
-      if (chartContainerRef.current) {
+      if (!isMounted || !chartRef.current || !chartContainerRef.current) return;
+      try {
         chart.applyOptions({
           width: chartContainerRef.current.clientWidth,
           height: height ?? chartContainerRef.current.clientHeight,
         });
+      } catch {
+        // Ignore if disposed
       }
     };
 
@@ -97,41 +123,40 @@ export function LightweightChart({ symbol, height }: LightweightChartProps) {
     ro.observe(chartContainerRef.current);
 
     return () => {
+      isMounted = false;
       ro.disconnect();
-      chart.remove();
+      seriesRef.current = null;
+      chartRef.current = null;
+      lastTimeRef.current = 0;
+      try {
+        chart.remove();
+      } catch {
+        // Ignore if already removed
+      }
     };
   }, [symbol, height]);
 
   // Real-time updates based on price stream
   useEffect(() => {
     const ltp = prices[symbol];
-    if (!ltp || !seriesRef.current) return;
+    const series = seriesRef.current;
+    if (!ltp || !series || lastTimeRef.current === 0) return;
 
-    // Simulate real-time ticking by updating the current bar
-    // or starting a new bar if 1 minute has passed.
-    // We'll use a local interval approximation since we don't receive new 'time' per tick.
-
-    // If we haven't set a base bar time, wait for history
-    if (lastTimeRef.current === 0) return;
-
-    // Since our backend generates a bar every "simulated" minute, the real time doesn't match backend time.
-    // A proper fix would be backend pushing the new completed bar.
-    // For now, let's just fetch the latest history every few seconds or poll it,
-    // OR we can just use the latest price to update the LAST bar if time matches.
-    // Actually, to make it look active, let's just update the close price of the last bar.
-
-    const lastData = seriesRef.current.dataByIndex(
-      seriesRef.current.data().length - 1
-    ) as CandleBar | null;
-    if (lastData) {
-      // We just blindly update the last bar with the LTP to show live tick movement
-      seriesRef.current.update({
-        time: lastData.time,
-        open: lastData.open,
-        high: Math.max(lastData.high, ltp),
-        low: Math.min(lastData.low, ltp),
-        close: ltp,
-      });
+    try {
+      const allData = series.data();
+      if (!allData || allData.length === 0) return;
+      const lastData = allData[allData.length - 1] as CandleBar | undefined;
+      if (lastData && "close" in lastData) {
+        series.update({
+          time: lastData.time,
+          open: lastData.open,
+          high: Math.max(lastData.high, ltp),
+          low: Math.min(lastData.low, ltp),
+          close: ltp,
+        });
+      }
+    } catch {
+      // Ignore if disposed during unmount
     }
   }, [prices, symbol]);
 

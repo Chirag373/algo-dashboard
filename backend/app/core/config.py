@@ -33,5 +33,17 @@ class Settings(BaseSettings):
     # Paper broker costs
     PAPER_FEE_PER_ORDER: float = 20.0  # flat brokerage per executed order (INR)
 
+    # Alpaca API credentials
+    ALPACA_KEY_ID: str = "PKGDOTH7MW6S2O7SJK4AH5IJZN"
+    ALPACA_SECRET_KEY: str = "DvTrBYH44GXic814aoLAewmYQQbMTyMxiPQYmnpujED3"
+    ALPACA_BASE_URL: str = "https://paper-api.markets/v2"
+    ALPACA_PAPER_URL: str = "https://paper-api.alpaca.markets/v2"
+    ALPACA_DATA_URL: str = "https://data.alpaca.markets/v2"
+
+    # Zerodha Kite Connect credentials
+    KITE_API_KEY: str = "ovioop7ol8h3p4tr"
+    KITE_API_SECRET: str = "7vblcmahili70qjkvy3v9xjsxlb7pgfi"
+    KITE_ACCESS_TOKEN: str = ""  # Set after login via /api/v1/kite/login
+
 
 settings = Settings()
