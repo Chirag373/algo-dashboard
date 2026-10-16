@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-export function FinbabaHeader() {
+function FinbabaHeader() {
   const pathname = usePathname();
 
   return (
