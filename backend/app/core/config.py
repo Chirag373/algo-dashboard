@@ -19,13 +19,13 @@ class Settings(BaseSettings):
 
     DB_PATH: str = str(BACKEND_DIR / "data" / "terminal.db")
 
-    # Safety: live trading is OFF unless explicitly enabled. No live broker
-    # adapter exists yet, so enabling it only unlocks the UI/API switch.
+    # Retained for configuration compatibility; the engine always refuses
+    # live mode and accepts only a local paper broker.
     LIVE_ENABLED: bool = False
 
     # Feed: "simulated" runs a compressed trading day so strategies can be
     # tested at any hour. Real broker feeds plug in behind the Feed interface.
-    FEED: str = "simulated"
+    FEED: str = "real_market"
     SIM_MINUTES_PER_TICK: int = 1  # virtual minutes advanced per real second
     SIM_DAY_PAUSE_SECONDS: int = 8  # pause between simulated days
     SIM_SEED: int | None = None

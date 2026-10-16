@@ -1,19 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import {
-  BarChart3,
-  FunctionSquare,
-  Maximize2,
-  Minus,
-  Plus,
-  Search,
-  Settings,
-  Star,
-  Trash2,
-  TrendingUp,
-  X,
-} from "lucide-react";
+import { BarChart3, Minus, Plus, Search, Star, Trash2, X } from "lucide-react";
+import { api } from "@/lib/terminal/api";
 import { useTerminal, pnlOf } from "@/lib/terminal/store";
 import { inr, num, pnlColor, signed } from "@/lib/terminal/format";
 import { Empty, Select } from "@/components/terminal";
@@ -52,7 +41,7 @@ const ALL_POPULAR_STOCKS = [
   { symbol: "BHARTIARTL", name: "Bharti Airtel Ltd", exchange: "NSE" },
   { symbol: "ITC", name: "ITC Ltd", exchange: "NSE" },
   { symbol: "KOTAKBANK", name: "Kotak Mahindra Bank", exchange: "NSE" },
-  { symbol: "LT", "name": "Larsen & Toubro Ltd", exchange: "NSE" },
+  { symbol: "LT", name: "Larsen & Toubro Ltd", exchange: "NSE" },
   { symbol: "AXISBANK", name: "Axis Bank Ltd", exchange: "NSE" },
   { symbol: "TATAMOTORS", name: "Tata Motors Ltd", exchange: "NSE" },
   { symbol: "MARUTI", name: "Maruti Suzuki India", exchange: "NSE" },
@@ -85,26 +74,26 @@ const ALL_POPULAR_STOCKS = [
 
 interface QuoteData {
   ltp: number;
-  chg: number;
-  pct: number;
+  chg: number | null;
+  pct: number | null;
   high?: number;
   low?: number;
 }
 
-function ChangeText({
-  chg,
-  pct,
-  className = "",
-}: {
-  chg: number;
-  pct: number;
-  className?: string;
-}) {
+function ChangeText({ chg, className = "" }: { chg: number | null; className?: string }) {
+  if (chg == null || !Number.isFinite(chg))
+    return (
+      <span className={`text-slate-400 ${className}`} title="Previous session close unavailable">
+        —
+      </span>
+    );
   return (
-    <span className={`${pnlColor(chg)} ${className}`}>
-      {chg >= 0 ? "+" : ""}
-      {num(chg)} ({pct >= 0 ? "+" : ""}
-      {pct.toFixed(2)}%)
+    <span
+      title="Points versus previous session close"
+      className={`${pnlColor(chg)} whitespace-nowrap ${className}`}
+    >
+      {chg > 0 ? "+" : ""}
+      {num(chg)} pts
     </span>
   );
 }
@@ -152,8 +141,7 @@ function Watchlist({
     const qLower = q.toLowerCase();
     return ALL_POPULAR_STOCKS.filter(
       (item) =>
-        (item.symbol.toLowerCase().includes(qLower) ||
-          item.name.toLowerCase().includes(qLower)) &&
+        (item.symbol.toLowerCase().includes(qLower) || item.name.toLowerCase().includes(qLower)) &&
         !watchlist.includes(item.symbol)
     ).slice(0, 8);
   }, [q, watchlist]);
@@ -256,13 +244,13 @@ function Watchlist({
             <tr className="text-[11px] text-slate-500">
               <th className="px-3 py-1.5 text-left font-medium">Symbol</th>
               <th className="px-3 py-1.5 text-right font-medium">LTP</th>
-              <th className="px-3 py-1.5 text-right font-medium">Change %</th>
+              <th className="px-3 py-1.5 text-right font-medium">Points</th>
               <th className="w-8" />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
             {filteredList.map((s) => {
-              const qData = quotes[s] || { ltp: 0, chg: 0, pct: 0 };
+              const qData = quotes[s] || { ltp: 0, chg: null, pct: null };
               const active = s === selected;
               return (
                 <tr
@@ -290,7 +278,7 @@ function Watchlist({
                   </td>
                   <td className="px-3 py-2 text-right mono-nums text-[11px]">
                     {qData.ltp ? (
-                      <ChangeText chg={qData.chg} pct={qData.pct} />
+                      <ChangeText chg={qData.chg} />
                     ) : (
                       <span className="text-slate-400">—</span>
                     )}
@@ -315,7 +303,9 @@ function Watchlist({
         {filteredList.length === 0 && (
           <div className="p-8 text-center">
             <Empty text="No stocks found in this tab" />
-            <p className="text-[11px] text-slate-400 mt-1">Use the search box above to add stocks.</p>
+            <p className="text-[11px] text-slate-400 mt-1">
+              Use the search box above to add stocks.
+            </p>
           </div>
         )}
       </div>
@@ -390,9 +380,7 @@ function OrderTicket({
             <div className="mono-nums text-[13px] font-bold text-slate-900">
               {quote.ltp ? num(quote.ltp) : "—"}
             </div>
-            {quote.ltp > 0 && (
-              <ChangeText chg={quote.chg} pct={quote.pct} className="mono-nums text-[11px]" />
-            )}
+            {quote.ltp > 0 && <ChangeText chg={quote.chg} className="mono-nums text-[11px]" />}
           </div>
         </div>
 
@@ -556,7 +544,7 @@ function ChartPanel({
             {quote.ltp ? num(quote.ltp) : "—"}
           </span>
           {quote.ltp > 0 && (
-            <ChangeText chg={quote.chg} pct={quote.pct} className="mono-nums text-xs font-semibold" />
+            <ChangeText chg={quote.chg} className="mono-nums text-xs font-semibold" />
           )}
         </div>
 
@@ -779,20 +767,26 @@ export default function Trading() {
   const [symbol, setSymbol] = useState("NIFTY 50");
   const [quotes, setQuotes] = useState<Record<string, QuoteData>>({});
 
-  // Load custom watchlist from localStorage on mount
+  // Restore the browser watchlist after hydration.
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("algo_user_watchlist");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+    const frame = requestAnimationFrame(() => {
+      try {
+        const saved = localStorage.getItem("algo_user_watchlist");
+        if (!saved) return;
+        const parsed: unknown = JSON.parse(saved);
+        if (
+          Array.isArray(parsed) &&
+          parsed.length > 0 &&
+          parsed.every((item) => typeof item === "string")
+        ) {
           setWatchlist(parsed);
           setSymbol(parsed[0]);
         }
+      } catch {
+        // Keep the default watchlist if stored data is invalid.
       }
-    } catch {
-      // fallback to default
-    }
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   // Save watchlist to localStorage whenever it changes
@@ -821,35 +815,35 @@ export default function Trading() {
     }
   };
 
-  // Poll real-time quotes every 4 seconds for watchlist stocks
+  // Complete each quote request before scheduling the next poll.
   useEffect(() => {
-    let active = true;
-
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
     const fetchQuotes = async () => {
       if (watchlist.length === 0) return;
       try {
-        const query = watchlist.slice(0, 15).join(",");
-        const res = await fetch(`http://localhost:8001/api/v1/quotes?symbols=${encodeURIComponent(query)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (active && data.quotes) {
-            setQuotes((prev) => ({ ...prev, ...data.quotes }));
-          }
-        }
+        const query = watchlist.join(",");
+        const data = await api<{ quotes: Record<string, QuoteData> }>(
+          "GET",
+          `/quotes?symbols=${encodeURIComponent(query)}`,
+          undefined,
+          { signal: controller.signal }
+        );
+        if (!controller.signal.aborted) setQuotes(data.quotes);
       } catch {
-        // ignore network error
+        // Retain the last successful quotes while reconnecting.
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(fetchQuotes, 15000);
       }
     };
-
-    fetchQuotes();
-    const interval = setInterval(fetchQuotes, 4000);
+    void fetchQuotes();
     return () => {
-      active = false;
-      clearInterval(interval);
+      controller.abort();
+      clearTimeout(timer);
     };
   }, [watchlist]);
 
-  const currentQuote = quotes[symbol] || { ltp: 0, chg: 0, pct: 0 };
+  const currentQuote = quotes[symbol] || { ltp: 0, chg: null, pct: null };
 
   return (
     <div

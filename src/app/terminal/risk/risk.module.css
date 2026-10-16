@@ -1,0 +1,23 @@
+.stats,
+.columns {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+.columns {
+  align-items: start;
+}
+.columns > * {
+  min-width: 0;
+  overflow: hidden;
+}
+@media (min-width: 640px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1280px) {
+  .stats {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}

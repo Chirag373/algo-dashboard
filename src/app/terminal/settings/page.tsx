@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useTerminal } from "@/context";
 import { Panel, Badge } from "@/components";
-import { Key, Shield, Sliders, CheckCircle2 } from "lucide-react";
+import { Key, CheckCircle2 } from "lucide-react";
 
 export default function SettingsPage() {
   const t = useTerminal();
@@ -86,7 +86,9 @@ export default function SettingsPage() {
                 type="button"
                 onClick={() => t.requestMode("paper")}
                 className={`px-3 py-1.5 rounded-md transition-colors ${
-                  t.mode === "paper" ? "bg-white text-blue-600 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+                  t.mode === "paper"
+                    ? "bg-white text-blue-600 shadow-2xs"
+                    : "text-slate-600 hover:text-slate-900"
                 }`}
               >
                 Paper Trading
@@ -95,7 +97,9 @@ export default function SettingsPage() {
                 type="button"
                 onClick={() => t.requestMode("live")}
                 className={`px-3 py-1.5 rounded-md transition-colors ${
-                  t.mode === "live" ? "bg-red-500 text-white shadow-2xs" : "text-slate-600 hover:text-slate-900"
+                  t.mode === "live"
+                    ? "bg-red-500 text-white shadow-2xs"
+                    : "text-slate-600 hover:text-slate-900"
                 }`}
               >
                 Live Trading

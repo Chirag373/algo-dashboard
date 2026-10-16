@@ -23,16 +23,19 @@ function describe(detail: unknown): string {
 export async function api<T = unknown>(
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
-  body?: unknown
+  body?: unknown,
+  options?: { signal?: AbortSignal }
 ): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
       method,
+      signal: options?.signal,
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
     throw new ApiError("Cannot reach the backend. Is it running on port 8001?");
   }
   const data = await res.json().catch(() => ({}));

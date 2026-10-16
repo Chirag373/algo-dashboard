@@ -4,17 +4,21 @@ Everything funnels through the same risk checks, whether an order comes from
 the UI or from a strategy. State is persisted to SQLite after each change.
 """
 import logging
+import copy
+from contextlib import contextmanager
 import math
-import re
-import time
+import sqlite3
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from app.db.database import Database
-from app.schemas import TIMEFRAMES, OrderIn, RiskIn, StrategyIn
+from app.schemas import OrderIn, RiskIn, StrategyIn
 from app.services.broker import PaperBroker
+from app.services.candles import aggregate, timeframe_minutes, normalize, US_SYMBOLS, IST
+from zoneinfo import ZoneInfo
+from app.services.conditions import evaluate
 from app.services.feed import (
     INDEX_SYMBOLS,
     PRICE_BOOK,
@@ -91,7 +95,9 @@ class TradingEngine:
         self.db = db
         self.feed = feed
         self.broker = broker
-        self.live_enabled = live_enabled
+        if not broker.is_paper:
+            raise EngineError("Only paper brokers are permitted", 403)
+        self.live_enabled = False
         self.mode = "paper"
         self.seq = db.max_seq()
 
@@ -107,14 +113,25 @@ class TradingEngine:
         if saved_prices and hasattr(feed, "prices"):
             feed.prices.update(saved_prices)  # type: ignore[attr-defined]
 
-        self.market_time = datetime.now(timezone.utc).replace(hour=9, minute=15, second=0, microsecond=0)
+        self.market_time = getattr(feed, "now", datetime.now(IST))
         self.market_open = False
         self.market_date = self.market_time.strftime("%Y-%m-%d")
         self.realized_today = sum(t["pnl"] for t in db.trades_for_date(self.market_date))
+        self.risk_runtime = db.get("riskRuntime", {})
+        self._refresh_risk_runtime()
         self.loss_enforced_date: str | None = None
         self.squared_date: str | None = None
-        self.orb: dict[str, dict[str, dict]] = {}
-        self._candle_cache: dict[str, tuple[float, list[dict]]] = {}
+        self.orb: dict[str, dict[str, dict]] = db.get("orbRuntime", {}) if db.get("orbRuntimeDate") == self.market_date else {}
+        self.runtime: dict[str, dict] = db.get("strategyRuntime", {})
+        for strategy in self.strategies:
+            try:
+                strategy.update(StrategyIn.model_validate(strategy).model_dump())
+                if strategy.get("stage") == "Live":
+                    strategy.update(stage="Paper", status="stopped")
+            except ValueError:
+                strategy["status"] = "stopped"
+                log.exception("Invalid saved strategy %s stopped", strategy.get("id"))
+        self.last_bars: dict = db.get("lastBars", {})
         self.publish: Callable[[], Awaitable[None]] | None = None
         self.save()
 
@@ -122,10 +139,15 @@ class TradingEngine:
     def save(self) -> None:
         self.db.set("killed", self.killed)
         self.db.set("risk", self.risk)
+        self.db.set("riskRuntime", self.risk_runtime)
         self.db.set("strategies", self.strategies)
         self.db.set("positions", self.positions)
         self.db.set("pending", self.pending)
         self.db.set("alerts", self.alerts[:50])
+        self.db.set("strategyRuntime", self.runtime)
+        self.db.set("orbRuntime", self.orb)
+        self.db.set("orbRuntimeDate", self.market_date)
+        self.db.set("lastBars", self.last_bars)
 
     def _next_seq(self) -> int:
         self.seq += 1
@@ -173,31 +195,75 @@ class TradingEngine:
         return self.day_pnl() <= -abs(self.risk["maxDailyLoss"])
 
     # ------------------------------------------------------------ risk checks
-    def _risk_reject_reason(self, symbol: str, qty: int, price: float, is_strategy: bool = False) -> str | None:
+    def _refresh_risk_runtime(self):
+        equity = float(self.risk["totalCapital"]) + self.day_pnl()
+        if self.risk_runtime.get("date") != self.market_date:
+            self.risk_runtime = {"date": self.market_date, "entries": 0,
+                                 "peak": max(float(self.risk["totalCapital"]), equity),
+                                 "blockedStrategies": [], "trackingStartedAt": self.market_time.isoformat()}
+        self.risk_runtime["peak"] = max(self.risk_runtime["peak"], equity)
+
+    def risk_status(self):
+        peak = self.risk_runtime["peak"]
+        equity = float(self.risk["totalCapital"]) + self.day_pnl()
+        drawdown = max(0, peak - equity)
+        stats = self.db.strategy_stats(self.market_date)
+        strategies = {}
+        for s in self.strategies:
+            sid = s["id"]
+            positions = [p for p in self.positions if p["strategyId"] == sid]
+            pnl = stats.get(sid, {}).get("dayRealizedPnl", 0) + sum(self._open_pnl(p) for p in positions)
+            limit = self.risk.get("strategyLimits", {}).get(sid, {})
+            loss_hit = bool(limit.get("maxDailyLoss") and pnl <= -limit["maxDailyLoss"])
+            strategies[sid] = {"dayPnl": _r2(pnl), "positions": len(positions),
+                               "blocked": loss_hit or sid in self.risk_runtime["blockedStrategies"]}
+        pct = drawdown / peak * 100 if peak > 0 else 0
+        return {"entriesToday": self.risk_runtime["entries"], "drawdownAmount": _r2(drawdown),
+                "drawdownPct": pct, "drawdownLimitHit": bool(self.risk.get("maxDrawdownPct") and pct >= self.risk["maxDrawdownPct"]),
+                "tradeLimitHit": bool(self.risk.get("maxTradesPerDay") and self.risk_runtime["entries"] >= self.risk["maxTradesPerDay"]),
+                "trackingStartedAt": self.risk_runtime["trackingStartedAt"], "strategies": strategies}
+
+    def _risk_reject_reason(self, symbol: str, qty: int, price: float, is_strategy: bool = False,
+                            strategy_id: str = "manual", sl_pct: float = 2.0) -> str | None:
         if symbol not in self.prices:
             return "Unknown symbol"
         if self.killed:
             return "Kill switch is engaged"
         if not self.market_open:
             return "Market is closed"
+        if self.loss_limit_hit():
+            return "Daily loss limit reached"
+        status = self.risk_status()
+        if status["drawdownLimitHit"]:
+            return "Daily drawdown limit reached"
+        if status["tradeLimitHit"]:
+            return "Max trades per day reached"
+        strategy = status["strategies"].get(strategy_id, {})
+        if strategy.get("blocked"):
+            return "Strategy daily loss limit reached"
+        position_limit = self.risk.get("strategyLimits", {}).get(strategy_id, {}).get("maxOpenPositions")
+        if position_limit and strategy.get("positions", 0) >= position_limit:
+            return "Strategy max open positions reached"
+        risk_pct = self.risk.get("riskPerTradePct", 0)
+        if risk_pct and price * qty * sl_pct / 100 > float(self.risk["totalCapital"]) * risk_pct / 100:
+            return "Planned stop-loss risk exceeds risk per trade limit"
         if qty <= 0:
             return "Quantity must be positive"
         if len(self.positions) >= self.risk.get("maxOpenPositions", 10):
             return f"Max open positions ({self.risk.get('maxOpenPositions', 10)}) reached"
 
-        if not is_strategy:
-            is_index = symbol in INDEX_SYMBOLS or "FUT" in symbol or "NIFTY" in symbol or "SENSEX" in symbol
-            trade_cost = (price * qty * 0.1) if is_index else (price * qty)
-            max_trade_cap = float(self.risk.get("maxCapitalPerTrade", 5000000))
-            if trade_cost > max_trade_cap:
-                return "Exceeds max capital per trade"
-            used = sum(
-                (p["avg"] * p["qty"] * (0.1 if (p["symbol"] in INDEX_SYMBOLS or "FUT" in p["symbol"]) else 1.0))
-                for p in self.positions
-            )
-            total_cap = float(self.risk.get("totalCapital", 10000000))
-            if used + trade_cost > total_cap:
-                return "Exceeds total capital"
+        is_index = symbol in INDEX_SYMBOLS or "FUT" in symbol or "NIFTY" in symbol or "SENSEX" in symbol
+        trade_cost = (price * qty * 0.1) if is_index else (price * qty)
+        max_trade_cap = float(self.risk.get("maxCapitalPerTrade", 5000000))
+        if trade_cost > max_trade_cap:
+            return "Exceeds max capital per trade"
+        used = sum(
+            (p["avg"] * p["qty"] * (0.1 if (p["symbol"] in INDEX_SYMBOLS or "FUT" in p["symbol"]) else 1.0))
+            for p in self.positions
+        )
+        total_cap = float(self.risk.get("totalCapital", 10000000))
+        if used + trade_cost > total_cap:
+            return "Exceeds total capital"
         return None
 
     # ----------------------------------------------------------------- orders
@@ -226,10 +292,13 @@ class TradingEngine:
             "sl": _r2(fill_price * (1 - sign * sl_pct / 100)),
             "target": _r2(fill_price * (1 + sign * target_pct / 100)),
             "openedAt": self.market_time.strftime("%H:%M:%S"),
+            "openedTimestamp": self.market_time.timestamp(),
+            "entryBar": self.last_bars.get(symbol),
             "fee": self.broker.fee_per_order,
             "tsl": tsl,
         }
         self.positions.insert(0, pos)
+        self.risk_runtime["entries"] += 1
         if record:
             self._order(symbol, side, order_type, qty, fill_price, "COMPLETE", strategy_id, note)
         return pos
@@ -273,6 +342,7 @@ class TradingEngine:
         raise EngineError("Open order not found", 404)
 
     def _close_position(self, pos: dict, price: float, reason: str) -> None:
+        price = _r2(price)
         sign = 1 if pos["side"] == "BUY" else -1
         gross = (price - pos["avg"]) * sign * pos["qty"]
         fees = pos.get("fee", 0) + self.broker.fee_per_order
@@ -295,6 +365,8 @@ class TradingEngine:
         self._order(pos["symbol"], "SELL" if pos["side"] == "BUY" else "BUY", "MARKET",
                     pos["qty"], price, "COMPLETE", pos["strategyId"], reason)
         self.positions = [p for p in self.positions if p["id"] != pos["id"]]
+        self.db.add_execution_log(pos["strategyId"], "exit", {"positionId": pos["id"], "trade": trade})
+        log.info("Position %s exited: %s price=%s pnl=%s", pos["id"], reason, price, pnl)
 
     def close_position(self, position_id: str, reason: str = "Manual exit") -> None:
         pos = next((p for p in self.positions if p["id"] == position_id), None)
@@ -327,7 +399,13 @@ class TradingEngine:
         self.mode = mode
 
     def update_risk(self, r: RiskIn) -> None:
+        unknown = set(r.strategyLimits) - {s["id"] for s in self.strategies}
+        if unknown:
+            raise EngineError("Risk limits refer to a strategy that no longer exists", 422)
+        if r.totalCapital != self.risk["totalCapital"]:
+            self.risk_runtime["peak"] += r.totalCapital - self.risk["totalCapital"]
         self.risk = r.model_dump()
+        self._refresh_risk_runtime()
         self.save()
 
     # ------------------------------------------------------------- strategies
@@ -338,34 +416,44 @@ class TradingEngine:
         return s
 
     def create_strategy(self, data: StrategyIn) -> dict:
-        s = {**data.model_dump(), "id": _uid("s"), "stage": "Draft", "status": "stopped", "version": 1}
+        s = {**data.model_dump(), "id": _uid("s"), "stage": "Paper" if data.template == "Custom" else "Draft", "status": "running" if data.template == "Custom" else "stopped", "version": 1}
         self.strategies.append(s)
+        self.runtime[s["id"]] = {"activatedAt": self.market_time.timestamp(), "symbols": {}}
+        self._execution_event(s, "created", {"configuration": data.model_dump(), "status": s["status"]})
+        self.alert("info", f"Strategy '{s['name']}' saved ({s['status']}, Paper Trading)")
         self.save()
         return s
 
     def update_strategy(self, sid: str, data: StrategyIn) -> dict:
         s = self._find_strategy(sid)
-        if s["status"] == "running":
+        if s["status"] != "stopped":
             raise EngineError("Stop the strategy before editing", 409)
+        if any(p["strategyId"] == sid for p in self.positions):
+            raise EngineError("Close this strategy's positions before editing", 409)
         if data.template != s["template"]:
             raise EngineError("Template cannot be changed after creation", 400)
         s.update(data.model_dump())
         s["version"] += 1
         self.orb.pop(sid, None)
+        self.runtime[sid] = {"activatedAt": self.market_time.timestamp(), "symbols": {}}
+        if s["template"] == "Custom":
+            s.update(status="running", stage="Paper")
+        self._execution_event(s, "updated", {"configuration": data.model_dump(), "version": s["version"]})
         self.save()
         return s
 
     def delete_strategy(self, sid: str) -> None:
         s = self._find_strategy(sid)
-        if s["status"] == "running":
-            raise EngineError("Stop the strategy before deleting", 409)
+        if s["status"] != "stopped" or any(p["strategyId"] == sid for p in self.positions):
+            raise EngineError("Stop the strategy and close its positions before deleting", 409)
         self.strategies = [x for x in self.strategies if x["id"] != sid]
         self.orb.pop(sid, None)
+        self.runtime.pop(sid, None)
         self.save()
 
     def clone_strategy(self, sid: str) -> dict:
         s = self._find_strategy(sid)
-        c = {**s, "params": dict(s["params"]), "id": _uid("s"), "name": f"{s['name']} (copy)",
+        c = {**copy.deepcopy(s), "params": dict(s["params"]), "id": _uid("s"), "name": f"{s['name']} (copy)",
              "version": 1, "stage": "Draft", "status": "stopped"}
         self.strategies.append(c)
         self.save()
@@ -373,15 +461,25 @@ class TradingEngine:
 
     def set_strategy_status(self, sid: str, status: str) -> None:
         s = self._find_strategy(sid)
+        if status not in {"running", "paused", "stopped"}:
+            raise EngineError("Invalid execution status")
         if status == "running":
             if self.killed:
                 raise EngineError("Release the kill switch before starting a strategy")
+            if s["template"] not in {"Custom", "ORB"}:
+                raise EngineError("This template does not have an execution engine")
+            # Validate persisted strategies as well as new API payloads.
+            try:
+                StrategyIn.model_validate(s)
+            except ValueError as exc:
+                raise EngineError(f"Invalid saved strategy: {exc}") from None
             s["stage"] = "Paper"
-            # Reset runtime state so strategy starts fresh with no stale flags
-            self.orb.pop(sid, None)
-        elif status == "stopped":
-            self.orb.pop(sid, None)
+            if s["status"] != "running":
+                self.runtime.setdefault(sid, {"symbols": {}})["activatedAt"] = self.market_time.timestamp()
+        # Pausing/stopping suppress entries; protective exits remain active.
+        # Signal latches survive all status changes and restarts.
         s["status"] = status
+        self._execution_event(s, "control", {"status": status})
         self.alert("info", f"Strategy '{s['name']}' {status} (Paper Trading)")
         self.save()
 
@@ -399,7 +497,30 @@ class TradingEngine:
         self.save()
 
     # -------------------------------------------------------------- tick loop
+    @contextmanager
+    def atomic(self):
+        keys = ("seq", "killed", "risk", "risk_runtime", "strategies", "positions", "pending", "alerts", "runtime", "orb", "last_bars", "prices", "realized_today", "market_date", "market_time", "market_open", "squared_date", "loss_enforced_date")
+        before = {key: copy.deepcopy(getattr(self, key)) for key in keys}
+        rejected = None
+        try:
+            with self.db.transaction():
+                try:
+                    yield
+                except EngineError as exc:
+                    # Rejected orders and their reasons remain in history.
+                    rejected = exc
+        except BaseException:
+            for key, value in before.items():
+                setattr(self, key, value)
+            raise
+        if rejected:
+            raise rejected
+
     def on_tick(self, tick: FeedTick) -> None:
+        with self.atomic():
+            self._process_tick(tick)
+
+    def _process_tick(self, tick: FeedTick) -> None:
         if tick.new_day:
             self.market_date = tick.market_time.strftime("%Y-%m-%d")
             self.realized_today = 0.0
@@ -408,16 +529,37 @@ class TradingEngine:
             self.alert("info", f"New trading day {self.market_date}")
         self.market_time = tick.market_time
         self.market_open = tick.market_open
+        self.market_date = tick.market_time.strftime("%Y-%m-%d")
+        self._refresh_risk_runtime()
         if not tick.market_open:
             self.db.set("prices", self.prices)
+            self.save()
             return
 
+        fresh = {}
         for sym, bar in tick.bars.items():
+            try:
+                normalize(bar)
+            except (ValueError, TypeError):
+                log.warning("Ignoring invalid market data for %s", sym)
+                continue
+            stamp = tick.market_time.timestamp()
+            signature = [bar.time, bar.open, bar.high, bar.low, bar.close, bar.volume]
+            previous = self.last_bars.get(sym)
+            if bar.time > stamp or stamp-bar.time > 120 or (previous and (bar.time < previous[0] or signature == previous)):
+                continue
+            self.last_bars[sym] = signature
+            fresh[sym] = bar
             self.prices[sym] = bar.close
+        tick = FeedTick(tick.market_time, tick.market_open, tick.new_day, fresh)
+        self._refresh_risk_runtime()
 
         self._fill_pending(tick)
         self._monitor_positions(tick)
-        self._square_off_times()
+        self._square_off_times(tick)
+        self._refresh_risk_runtime()
+        self._enforce_strategy_risk(tick)
+        self._enforce_loss_limit()
         self._run_strategies(tick)
         self._enforce_loss_limit()
         self.db.set("prices", self.prices)
@@ -432,7 +574,7 @@ class TradingEngine:
             if not touched:
                 continue
             self.pending.remove(o)
-            reason = self._risk_reject_reason(o["symbol"], o["qty"], o["price"])
+            reason = self._risk_reject_reason(o["symbol"], o["qty"], o["price"], strategy_id=o["strategyId"])
             if reason:
                 o.update(status="REJECTED", note=reason)
                 self.alert("warn", f"Limit order rejected: {reason}")
@@ -449,18 +591,30 @@ class TradingEngine:
             if not bar:
                 continue
             buy = pos["side"] == "BUY"
-            if (buy and bar.low <= pos["sl"]) or (not buy and bar.high >= pos["sl"]):
+            # A candle's pre-entry extremes must never stop a new position.
+            same_bar = bar.time < pos.get("openedTimestamp", 0)
+            low, high = (bar.close, bar.close) if same_bar else (bar.low, bar.high)
+            baseline = pos.get("entryBar")
+            if same_bar and baseline and bar.time == baseline[0]:
+                # Newly observed extremes in the entry minute are valid; older
+                # extremes belong to the period before the fill.
+                low = bar.low if bar.low < baseline[3] else bar.close
+                high = bar.high if bar.high > baseline[2] else bar.close
+            gap = bar.close if same_bar else bar.open
+            if (buy and low <= pos["sl"]) or (not buy and high >= pos["sl"]):
                 reason = "Trailing stop hit" if pos.get("tsl") and pos["tsl"].get("locked") else "Stop-loss hit"
-                self._close_position(pos, pos["sl"], reason)
+                fill = min(gap, pos["sl"]) if buy else max(gap, pos["sl"])
+                self._close_position(pos, fill, reason)
                 self.alert("warn", f"{pos['symbol']} {reason.lower()}")
                 continue
-            if (buy and bar.high >= pos["target"]) or (not buy and bar.low <= pos["target"]):
-                self._close_position(pos, pos["target"], "Target hit")
+            if (buy and high >= pos["target"]) or (not buy and low <= pos["target"]):
+                fill = max(gap, pos["target"]) if buy else min(gap, pos["target"])
+                self._close_position(pos, fill, "Target hit")
                 self.alert("info", f"{pos['symbol']} target hit")
                 continue
             tsl = pos.get("tsl")
             if tsl:
-                best = bar.high if buy else bar.low
+                best = high if buy else low
                 gain = ((best - pos["avg"]) if buy else (pos["avg"] - best)) / pos["avg"] * 100
                 if gain >= tsl["lockPct"]:
                     tsl["locked"] = True
@@ -471,25 +625,41 @@ class TradingEngine:
                     if (buy and new_sl > pos["sl"]) or (not buy and new_sl < pos["sl"]):
                         pos["sl"] = _r2(new_sl)
 
-    def _square_off_times(self) -> None:
-        now = _hhmm(self.market_time)
-        if now >= self.risk["autoSquareOffTime"] and self.squared_date != self.market_date:
-            self.squared_date = self.market_date
-            if self.positions:
-                self.square_off_all("Auto square-off")
-        for s in self.strategies:
-            t = s["params"].get("squareOffTime")
-            if t and now >= t:
-                for pos in [p for p in self.positions if p["strategyId"] == s["id"]]:
-                    self._close_position(pos, self.prices[pos["symbol"]], "Strategy square-off")
+    def _symbol_time(self, symbol: str) -> str:
+        if self.market_time.tzinfo and symbol in US_SYMBOLS:
+            return _hhmm(self.market_time.astimezone(ZoneInfo("America/New_York")))
+        return _hhmm(self.market_time)
+
+    def _square_off_times(self, tick: FeedTick) -> None:
+        for pos in list(self.positions):
+            if pos["symbol"] not in tick.bars:
+                continue
+            now = self._symbol_time(pos["symbol"])
+            strategy = next((s for s in self.strategies if s["id"] == pos["strategyId"]), None)
+            cutoff = strategy["params"].get("squareOffTime") if strategy else None
+            if now >= self.risk["autoSquareOffTime"] or (cutoff and now >= cutoff):
+                self._close_position(pos, self.prices[pos["symbol"]], "Strategy square-off" if cutoff and now >= cutoff else "Auto square-off")
 
     def _enforce_loss_limit(self) -> None:
-        if self.loss_limit_hit() and self.loss_enforced_date != self.market_date:
+        drawdown_hit = self.risk_status()["drawdownLimitHit"]
+        if (self.loss_limit_hit() or drawdown_hit) and (self.loss_enforced_date != self.market_date or not self.killed or self.positions):
             self.loss_enforced_date = self.market_date
             self.killed = True
             for pos in list(self.positions):
-                self._close_position(pos, self.prices[pos["symbol"]], "Max daily loss hit")
-            self.alert("critical", "Max daily loss reached. Kill switch engaged, all positions closed.")
+                self._close_position(pos, self.prices[pos["symbol"]], "Daily drawdown limit hit" if drawdown_hit else "Max daily loss hit")
+            self.alert("critical", "Daily drawdown limit reached. Kill switch engaged, all positions closed." if drawdown_hit else "Max daily loss reached. Kill switch engaged, all positions closed.")
+
+    def _enforce_strategy_risk(self, tick):
+        status = self.risk_status()
+        for sid, state in status["strategies"].items():
+            if not state["blocked"]:
+                continue
+            if sid not in self.risk_runtime["blockedStrategies"]:
+                self.risk_runtime["blockedStrategies"].append(sid)
+                self.alert("warn", f"Strategy daily loss limit reached: {sid}. New entries blocked for today.")
+            for pos in list(self.positions):
+                if pos["strategyId"] == sid and pos["symbol"] in tick.bars:
+                    self._close_position(pos, self.prices[pos["symbol"]], "Strategy daily loss limit hit")
 
     @staticmethod
     def _universe(instrument: str) -> list[str]:
@@ -517,273 +687,92 @@ class TradingEngine:
     def _run_strategies(self, tick: FeedTick) -> None:
         if self.killed:
             return
-        for s in self.strategies:
-            if s["status"] == "running":
+        for sid in [s["id"] for s in self.strategies]:
+            s = self._find_strategy(sid)
+            if s["status"] in {"running", "paused"}:
                 try:
-                    if s.get("template") == "ORB":
-                        self._run_orb(s, tick)
-                    elif s.get("template") == "Custom" or s.get("entryRules"):
-                        self._run_custom(s, tick)
-                except Exception:  # a bad strategy must never stop the engine
+                    with self.atomic():
+                        if s.get("template") == "ORB" and s["status"] == "running":
+                            self._run_orb(s, tick)
+                        elif s.get("template") == "Custom" or s.get("entryRules"):
+                            self._run_custom(s, tick)
+                except sqlite3.Error:
+                    # Database failures roll back the whole tick for safe retry.
+                    raise
+                except Exception as exc:
                     log.exception("Strategy %s (%s) failed", s.get("id"), s.get("name"))
+                    s = self._find_strategy(sid)
+                    self._execution_event(s, "error", {"message": str(exc)})
                     s["status"] = "stopped"
                     self.alert("critical", f"Strategy '{s.get('name')}' encountered an error and was stopped")
 
-    def _get_candles(self, symbol: str, timeframe: str) -> list[dict]:
-        clean_sym = symbol.replace(" FUT", "").strip()
-        cache_key = f"{clean_sym}_{timeframe}"
-        now_ts = time.time()
-
-        cached = self._candle_cache.get(cache_key)
-        if cached and (now_ts - cached[0]) < 8.0:
-            return cached[1]
-
-        candles = []
-        try:
-            from app.services.kite_backtest import fetch_historical_candles
-            candles = fetch_historical_candles(clean_sym, timeframe, days_back=10)
-        except Exception:
-            try:
-                from app.services.kite_backtest import fetch_exchange_candles
-                candles = fetch_exchange_candles(clean_sym, timeframe, days_back=10)
-            except Exception:
-                pass
-
-        if candles:
-            self._candle_cache[cache_key] = (now_ts, candles)
-            return candles
-        elif cached:
-            return cached[1]
-        return []
-
-    def _get_indicator_series(self, ind_str: str, closes: list[float]) -> list[float | None]:
-        """Compute the full time-series of indicator values across historical closes."""
-        if not closes:
-            return []
-        clean = ind_str.strip()
-        match = re.match(r"^(EMA|SMA|RSI)\s*\(?(\d+)?\)?$", clean, re.IGNORECASE)
-        if match:
-            ind_type = match.group(1).upper()
-            period = int(match.group(2)) if match.group(2) else (9 if ind_type == "EMA" else 20)
-            from app.services.kite_backtest import calc_ema, calc_sma, calc_rsi
-            if ind_type == "EMA":
-                return calc_ema(closes, period)
-            elif ind_type == "SMA":
-                return calc_sma(closes, period)
-            elif ind_type == "RSI":
-                return calc_rsi(closes, period)
-
-        if clean.lower() in ("price", "close", "price (close)", "ltp"):
-            return [float(c) for c in closes]
-
-        # Check if constant number (e.g. "50", "30", "25000")
-        try:
-            val = float(clean)
-            return [val] * len(closes)
-        except ValueError:
-            return [float(closes[-1])] * len(closes)
-
-    def _calculate_indicator(self, ind_str: str, history_bars: list[Any]) -> float:
-        """Parse and calculate latest indicator value like 'EMA 9', 'EMA 21', 'Price', 'Number'."""
-        if not history_bars:
-            return 0.0
-        closes = [b.close if hasattr(b, "close") else b["close"] for b in history_bars]
-        series = self._get_indicator_series(ind_str, closes)
-        for val in reversed(series):
-            if val is not None:
-                return round(float(val), 2)
-        return round(float(closes[-1]), 2) if closes else 0.0
-
-    def _evaluate_rule(
-        self,
-        rule: dict,
-        closes: list[float],
-        sym_state: dict,
-        rule_key: str,
-        last_candle_time: str,
-    ) -> bool:
-        """
-        Evaluate a single rule (e.g. EMA 9 crosses above EMA 25).
-        Returns True ONLY when the rule condition is genuinely satisfied on a live bar,
-        and never enters prematurely upon startup or when lines were already crossed previously.
-        """
-        if len(closes) < 2:
-            return False
-
-        left_ind = rule.get("indicator", "EMA 9")
-        right_ind = rule.get("value", "EMA 21")
-        op = rule.get("operator", "crosses above").strip().lower()
-
-        left_series = self._get_indicator_series(left_ind, closes)
-        right_series = self._get_indicator_series(right_ind, closes)
-
-        if len(left_series) < 2 or len(right_series) < 2:
-            return False
-
-        prev_l = left_series[-2]
-        curr_l = left_series[-1]
-        prev_r = right_series[-2]
-        curr_r = right_series[-1]
-
-        if curr_l is None or curr_r is None:
-            return False
-
-        r_state = sym_state.setdefault(rule_key, {
-            "armed": False,
-            "initialized": False,
-            "last_trigger_candle": None,
-        })
-
-        # Baseline initialization on strategy startup:
-        # Prevent premature triggers from historical bars completed prior to activation.
-        if not r_state["initialized"]:
-            r_state["initialized"] = True
-            r_state["last_trigger_candle"] = last_candle_time
-            if op == "crosses above":
-                # Armed only if left is currently under right, ready to cross above in future
-                r_state["armed"] = (curr_l <= curr_r)
-            elif op == "crosses below":
-                # Armed only if left is currently above right, ready to cross below in future
-                r_state["armed"] = (curr_l >= curr_r)
-            else:
-                r_state["armed"] = True
-            return False
-
-        # Crossover evaluation
-        if op == "crosses above":
-            # Re-arm if price dips back below or equal
-            if curr_l <= curr_r:
-                r_state["armed"] = True
-            # True crossover: was <= on previous candle, is > on current candle, was armed, not yet triggered on this candle
-            if prev_l is not None and prev_r is not None and prev_l <= prev_r and curr_l > curr_r:
-                if r_state.get("armed", False) and r_state.get("last_trigger_candle") != last_candle_time:
-                    r_state["armed"] = False
-                    r_state["last_trigger_candle"] = last_candle_time
-                    return True
-            return False
-
-        elif op == "crosses below":
-            # Re-arm if price crosses back above or equal
-            if curr_l >= curr_r:
-                r_state["armed"] = True
-            # True crossover: was >= on previous candle, is < on current candle, was armed, not yet triggered on this candle
-            if prev_l is not None and prev_r is not None and prev_l >= prev_r and curr_l < curr_r:
-                if r_state.get("armed", False) and r_state.get("last_trigger_candle") != last_candle_time:
-                    r_state["armed"] = False
-                    r_state["last_trigger_candle"] = last_candle_time
-                    return True
-            return False
-
-        elif op in ("greater than", "is above", ">"):
-            return curr_l > curr_r
-
-        elif op in ("less than", "is below", "<"):
-            return curr_l < curr_r
-
-        elif op in ("equals", "=="):
-            return abs(curr_l - curr_r) < 0.01
-
-        return False
+    def _execution_event(self, s: dict, kind: str, data: dict) -> None:
+        self.db.add_execution_log(s["id"], kind, data)
+        log.info("strategy=%s event=%s %s", s["id"], kind, data)
 
     def _run_custom(self, s: dict, tick: FeedTick) -> None:
-        """Execute custom rule-based strategies (e.g. EMA 9 crosses above EMA 21) in Paper Trading mode."""
-        rules = s.get("entryRules") or []
-        if not rules:
-            return
-        p = s.get("params", {})
-        cutoff = p.get("squareOffTime", "15:15")
-        if _hhmm(tick.market_time) >= cutoff:
-            return
-
-        state = self.orb.setdefault(s["id"], {})
-
-        for sym in self._universe(s.get("instrument", "NIFTY 50")):
-            tf = s.get("timeframe", "5m")
-            history_bars = self._get_candles(sym, tf)
-
+        p = s["params"]
+        runtime = self.runtime.setdefault(s["id"], {"activatedAt": tick.market_time.timestamp(), "symbols": {}})
+        for sym in self._universe(s["instrument"]):
+            state = runtime["symbols"].setdefault(sym, {})
             bar = tick.bars.get(sym)
-            if history_bars:
-                last_c = history_bars[-1]
-                if not bar:
-                    from app.services.feed import Bar
-                    bar = Bar(
-                        symbol=sym,
-                        time=int(datetime.now().timestamp()),
-                        open=last_c["open"],
-                        high=last_c["high"],
-                        low=last_c["low"],
-                        close=last_c["close"],
-                    )
-                else:
-                    bar.close = last_c["close"]
-                self.prices[sym] = bar.close
-            elif not bar:
-                curr_p = self.prices.get(sym) or self.prices.get(sym.replace(" FUT", "")) or 0
-                if curr_p:
-                    from app.services.feed import Bar
-                    bar = Bar(symbol=sym, time=int(datetime.now().timestamp()), open=curr_p, high=curr_p, low=curr_p, close=curr_p)
-                else:
-                    continue
-
-            self.prices[sym] = bar.close
-
-            if not history_bars and hasattr(self.feed, "history") and sym in self.feed.history:
-                history_bars = self.feed.history[sym]
-            if len(history_bars) < 3:
-                history_bars = [bar]
-
-            closes = [b.close if hasattr(b, "close") else b["close"] for b in history_bars]
-            last_candle_time = str(history_bars[-1].get("time") if isinstance(history_bars[-1], dict) else getattr(history_bars[-1], "time", ""))
-
-            sym_state = state.setdefault(sym, {})
-
-            # 1. If already holding a position for this strategy & symbol, evaluate exit rules
-            open_pos = next((x for x in self.positions if x["strategyId"] == s["id"] and x["symbol"] == sym), None)
-            if open_pos:
-                exit_rules = s.get("exitRules") or []
-                if exit_rules:
-                    exit_passed = True
-                    for idx, erule in enumerate(exit_rules):
-                        erule_key = f"exit_{idx}"
-                        if not self._evaluate_rule(erule, closes, sym_state, erule_key, last_candle_time):
-                            exit_passed = False
-                            break
-                    if exit_passed:
-                        self._close_position(
-                            open_pos, bar.close,
-                            f"Custom Exit: {exit_rules[0].get('indicator')} {exit_rules[0].get('operator')} {exit_rules[0].get('value')}"
-                        )
-                        self.alert("info", f"{s['name']}: {sym} exited @ {bar.close:.2f} (Exit Rule satisfied)")
+            if not bar and self.feed.kind == "real_market":
+                history = getattr(self.feed, "history", {}).get(sym, [])
+                bar = history[-1] if history else None
+            if not bar or not 0 <= tick.market_time.timestamp() - bar.time <= 120:
+                message = getattr(self.feed, "errors", {}).get(sym) or "Waiting for fresh market data"
+                if state.get("message") != message:
+                    self._execution_event(s, "waiting", {"symbol": sym, "message": message})
+                state["message"] = message
                 continue
-
-            # 2. Evaluate entry rules
-            all_passed = True
-            for idx, rule in enumerate(rules):
-                rule_key = f"entry_{idx}"
-                if not self._evaluate_rule(rule, closes, sym_state, rule_key, last_candle_time):
-                    all_passed = False
-                    break
-
-            if all_passed:
-                qty = max(1, int(p.get("quantity") or 100))
-
-                side = "BUY"
-                reason = self._risk_reject_reason(sym, qty, bar.close, is_strategy=True)
-                if reason:
-                    self._order(sym, side, "MARKET", qty, bar.close, "REJECTED", s["id"], reason)
-                    self.alert("warn", f"{s['name']}: {sym} {side} rejected: {reason}")
-                    continue
-
-                fill = self.broker.execute_market(sym, side, qty, bar.close)
-                sl_pct = float(p.get("stopLossPercent") or p.get("stopLoss") or 1.0)
-                target_pct = float(p.get("targetPercent") or p.get("targetProfit") or 2.0)
-
-                self._open_position(
-                    sym, side, qty, fill.price, s["id"],
-                    f"Custom Rule Entry: {rules[0].get('indicator')} {rules[0].get('operator')} {rules[0].get('value')}",
-                    sl_pct=sl_pct, target_pct=target_pct,
-                )
-                self.alert("info", f"{s['name']} triggered: {side} {qty} {sym} @ {fill.price:.2f}")
+            if hasattr(self.feed, "candles"):
+                candles = self.feed.candles(sym, s["timeframe"], tick.market_time)
+            else:
+                candles = aggregate(getattr(self.feed, "history", {}).get(sym, []), s["timeframe"], tick.market_time, sym)
+            if not candles:
+                state["message"] = "Waiting for complete timeframe candles"
+                continue
+            latest = candles[-1]
+            end = latest["end"]
+            if state.get("lastCandle", -1) >= latest["time"]:
+                continue
+            # Consume old data without trading historical signals at today's price.
+            state["lastCandle"] = latest["time"]
+            if end <= runtime["activatedAt"] or tick.market_time.timestamp() - end > 120:
+                state["message"] = "Waiting for a new candle after activation"
+                continue
+            entry = evaluate(s["entryRules"], candles)
+            previous = state.get("matched", False)
+            if entry.matched is not None:
+                state["matched"] = entry.matched
+            state["conditions"] = entry.conditions
+            state["message"] = "Insufficient history or volume" if entry.matched is None else ("Entry conditions satisfied" if entry.matched else "Waiting for entry conditions")
+            self._execution_event(s, "evaluation", {"symbol": sym, "candle": latest["time"], "matched": entry.matched, "conditions": entry.conditions})
+            position = next((x for x in self.positions if x["strategyId"] == s["id"] and x["symbol"] == sym), None)
+            if position:
+                exits = s.get("exitRules", [])
+                if exits:
+                    result = evaluate(exits, candles)
+                    self._execution_event(s, "exit_evaluation", {"symbol": sym, "conditions": result.conditions, "matched": result.matched})
+                    if result.matched:
+                        self._close_position(position, bar.close, "Exit conditions satisfied")
+                continue
+            if not entry.matched or previous or s["status"] != "running":
+                continue
+            if self._symbol_time(sym) >= p["squareOffTime"] or self._symbol_time(sym) >= self.risk["autoSquareOffTime"]:
+                continue
+            self._execution_event(s, "signal", {"symbol": sym, "candle": latest["time"]})
+            qty = int(p["quantity"])
+            reason = self._risk_reject_reason(sym, qty, bar.close, is_strategy=True, strategy_id=s["id"], sl_pct=p["stopLossPercent"])
+            if reason:
+                self._order(sym, "BUY", "MARKET", qty, bar.close, "REJECTED", s["id"], reason)
+                self._execution_event(s, "rejected", {"symbol": sym, "reason": reason})
+                state["message"] = reason
+                continue
+            fill = self.broker.execute_market(sym, "BUY", qty, bar.close)
+            pos = self._open_position(sym, "BUY", qty, fill.price, s["id"], "Builder entry (Paper)", sl_pct=p["stopLossPercent"], target_pct=p["targetPercent"])
+            self._execution_event(s, "entry", {"symbol": sym, "position": pos, "signalCandle": latest["time"]})
+            self.alert("info", f"{s['name']}: BUY {qty} {sym} @ {fill.price:.2f} (Paper)")
 
     def _run_orb(self, s: dict, tick: FeedTick) -> None:
         """Opening range breakout.
@@ -795,7 +784,7 @@ class TradingEngine:
         tslLockPercent profit then trails by tslTrailStep per step of extra gain.
         """
         p = s["params"]
-        tf = TIMEFRAMES[s["timeframe"]]
+        tf = timeframe_minutes(s["timeframe"])
         n = int(p["rangeCandleCount"])
         now_min = tick.market_time.hour * 60 + tick.market_time.minute
         range_end = 9 * 60 + 15 + n * tf
@@ -827,7 +816,7 @@ class TradingEngine:
             if qty < 1:
                 continue
             side = "BUY" if bar.close > d["high"] else "SELL"
-            reason = self._risk_reject_reason(sym, qty, bar.close, is_strategy=True)
+            reason = self._risk_reject_reason(sym, qty, bar.close, is_strategy=True, strategy_id=s["id"], sl_pct=float(p["initialSlPercent"]))
             if reason:
                 d["armed"] = False
                 self._order(sym, side, "MARKET", qty, bar.close, "REJECTED", s["id"], reason)
@@ -856,33 +845,22 @@ class TradingEngine:
         enhanced_strategies = []
         for s in self.strategies:
             strat_copy = dict(s)
-            sym = strat_copy.get("instrument", "NIFTY 50")
+            sym = self._universe(strat_copy.get("instrument", "NIFTY 50"))[0]
             clean_sym = sym.replace(" FUT", "").strip()
             ltp = self.prices.get(clean_sym) or self.prices.get(sym, 0.0)
             strat_copy["currentPrice"] = ltp
-            rules = s.get("entryRules") or []
-            if rules:
-                rule0 = rules[0]
-                left_ind = rule0.get("indicator", "EMA 9")
-                right_ind = rule0.get("value", "EMA 25")
-                tf = s.get("timeframe", "5m")
-                candles = self._get_candles(clean_sym, tf)
-                if candles:
-                    closes = [c["close"] for c in candles]
-                    l_val = self._calculate_indicator(left_ind, candles)
-                    r_val = self._calculate_indicator(right_ind, candles)
-                    strat_state = self.orb.get(s["id"], {}).get(clean_sym, {})
-                    is_armed = strat_state.get("entry_0", {}).get("armed", True)
-                    strat_copy["liveIndicators"] = {
-                        "leftName": left_ind,
-                        "leftValue": l_val,
-                        "rightName": right_ind,
-                        "rightValue": r_val,
-                        "operator": rule0.get("operator", "crosses above"),
-                        "lastCandleTime": str(candles[-1].get("time", "")),
-                        "candleClose": closes[-1] if closes else ltp,
-                        "armed": is_armed,
-                    }
+            states = self.runtime.get(s["id"], {}).get("symbols", {})
+            strat_copy["execution"] = states
+            first = next(iter(states.values()), {})
+            conditions = first.get("conditions", [])
+            if conditions:
+                c = conditions[0]
+                strat_copy["liveIndicators"] = {
+                    "leftName": c["indicator"], "leftValue": c["left"],
+                    "rightName": c["value"], "rightValue": c["right"],
+                    "operator": c["operator"], "lastCandleTime": str(first.get("lastCandle", "")),
+                    "candleClose": ltp, "armed": not first.get("matched", False),
+                }
             enhanced_strategies.append(strat_copy)
 
         return {
@@ -897,8 +875,10 @@ class TradingEngine:
             "positions": positions,
             "orders": orders,
             "closed": self.db.recent_trades(200),
+            "strategyStats": self.db.strategy_stats(self.market_date),
             "alerts": self.alerts[:30],
             "risk": self.risk,
+            "riskStatus": self.risk_status(),
             "openPnl": _r2(self.open_pnl()),
             "realizedPnl": _r2(self.realized_today),
             "dayPnl": _r2(self.day_pnl()),

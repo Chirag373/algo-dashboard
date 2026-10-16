@@ -8,8 +8,12 @@ Kite Connect API routes:
 - POST /api/v1/kite/backtest          → Run real-data backtest
 """
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+import copy
+import logging
+
+from fastapi import APIRouter, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field, ConfigDict
 
 router = APIRouter()
 
@@ -23,12 +27,12 @@ class TokenIn(BaseModel):
 
 
 class BacktestIn(BaseModel):
-    symbol: str = "NIFTY 50"
-    interval: str = "5m"
-    days_back: int = 60
-    capital: float = 300000
-    slippage_pct: float = 0.05
-    strategy: dict
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    strategy_id: str = Field(min_length=1)
+    days_back: int = Field(default=30, ge=1, le=3650, strict=True)
+    capital: float = Field(default=300000, gt=0, le=1e12)
+    slippage_pct: float = Field(default=0.05, ge=0, le=5)
+    fee_per_order: float | None = Field(default=None, ge=0, le=100000)
 
 
 @router.get("/login-url")
@@ -42,7 +46,7 @@ async def kite_login_url():
 
 
 @router.post("/session")
-async def kite_session(body: SessionIn):
+def kite_session(body: SessionIn):
     """Exchange request_token for access_token after Kite login."""
     try:
         from app.services.kite_backtest import generate_session
@@ -64,7 +68,7 @@ async def kite_set_token(body: TokenIn):
 
 
 @router.get("/status")
-async def kite_status():
+def kite_status():
     """Check if Kite access token is valid by making a live API call."""
     import urllib.request
     import json
@@ -94,7 +98,7 @@ async def kite_status():
 
 
 @router.get("/candles")
-async def kite_candles(symbol: str = "NIFTY 50", interval: str = "5m", days_back: int = 30):
+def kite_candles(symbol: str = "NIFTY 50", interval: str = "5m", days_back: int = 30):
     """Fetch real historical OHLCV candles from Kite for a symbol."""
     try:
         from app.services.kite_backtest import fetch_historical_candles
@@ -107,43 +111,23 @@ async def kite_candles(symbol: str = "NIFTY 50", interval: str = "5m", days_back
 
 
 @router.post("/backtest")
-async def kite_backtest(body: BacktestIn):
-    """
-    Run a full indicator-based backtest using real Kite historical data.
-    Fetches real OHLCV candles and applies strategy conditions (EMA crossovers, etc.)
-    """
+async def kite_backtest(body: BacktestIn, request: Request):
+    from app.core.config import settings
+    from app.services.backtest import run_saved_backtest
+    from app.services.engine import EngineError
+    from app.services.history import HistoryError
     try:
-        from app.services.kite_backtest import fetch_historical_candles, run_backtest
-
-        # Fetch real candles
-        candles = fetch_historical_candles(body.symbol, body.interval, body.days_back)
-        if len(candles) < 30:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Not enough data: only {len(candles)} candles fetched. Try increasing days_back."
-            )
-
-        # Inject instrument into strategy
-        strat = dict(body.strategy)
-        strat["instrument"] = body.symbol
-
-        result = run_backtest(
-            candles=candles,
-            strategy=strat,
-            capital=body.capital,
-            slippage_pct=body.slippage_pct,
+        # Snapshot the saved version on the engine thread before doing any I/O.
+        strategy = copy.deepcopy(request.app.state.engine._find_strategy(body.strategy_id))
+        return await run_in_threadpool(
+            run_saved_backtest, strategy, body.days_back, body.capital,
+            body.slippage_pct,
+            settings.PAPER_FEE_PER_ORDER if body.fee_per_order is None else body.fee_per_order,
         )
-
-        return {
-            "ok": True,
-            "symbol": body.symbol,
-            "interval": body.interval,
-            "candleCount": len(candles),
-            **result,
-        }
-    except HTTPException:
-        raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Backtest failed: {str(e)}")
+    except EngineError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from None
+    except (HistoryError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except Exception:
+        logging.getLogger("backtest").exception("Historical backtest failed")
+        raise HTTPException(status_code=502, detail="Historical backtest failed. Check provider availability and server logs; no trading state was changed.") from None

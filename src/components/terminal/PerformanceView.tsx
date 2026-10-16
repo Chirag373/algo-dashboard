@@ -11,7 +11,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { computeMetrics, equityCurve, type DayResult } from "@/lib/terminal/analytics";
+import type { AnalyticsResult } from "@/lib/terminal/analytics";
+import styles from "@/app/terminal/dashboard.module.css";
 import { inr, num, pnlColor, signed } from "@/lib/terminal/format";
 import { Panel, Stat } from "./ui";
 
@@ -24,65 +25,77 @@ const tip = {
   boxShadow: "0 8px 30px rgba(0, 0, 0, 0.12)",
 };
 
-export default function PerformanceView({ days, capital }: { days: DayResult[]; capital: number }) {
-  const m = computeMetrics(days, capital);
-  const curve = equityCurve(days);
+export default function PerformanceView({ result }: { result: AnalyticsResult }) {
+  const { metrics: m, days } = result;
+  const curve = days;
+  const money = (value: number | null) => (value === null ? "—" : signed(value, 2));
+  const percent = (value: number | null) => (value === null ? "—" : `${value.toFixed(2)}%`);
+  const number = (value: number | null) => (value === null ? "—" : num(value));
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 2xl:grid-cols-6 gap-3">
-        <Stat label="Net P&L" value={signed(m.totalPnl)} tone={pnlColor(m.totalPnl)} />
+      <div className={styles.summaryGrid}>
+        <Stat label="Net P&L" value={money(m.totalPnl)} tone={pnlColor(m.totalPnl)} />
         <Stat label="Trades" value={String(m.trades)} />
-        <Stat label="Win rate" value={`${m.winRate.toFixed(1)}%`} />
+        <Stat label="Win rate" value={percent(m.winRate)} />
+        <Stat label="Profit factor" value={m.profitFactorInfinite ? "∞" : number(m.profitFactor)} />
         <Stat
-          label="Profit factor"
-          value={Number.isFinite(m.profitFactor) ? num(m.profitFactor) : "∞"}
+          label="Max drawdown"
+          value={percent(m.maxDrawdown)}
+          sub={inr(m.maxDrawdownAmount, 2)}
+          tone="text-rose-600"
         />
-        <Stat label="Max drawdown" value={`${m.maxDrawdown.toFixed(2)}%`} tone="text-rose-600" />
-        <Stat label="Sharpe (ann.)" value={num(m.sharpe)} />
-        <Stat label="Avg winning day" value={inr(m.avgWin)} tone="text-emerald-600" />
-        <Stat label="Avg losing day" value={inr(m.avgLoss)} tone="text-rose-600" />
+        <Stat label="Sharpe · Active days (ann.)" value={number(m.sharpe)} />
+        <Stat label="Avg winning day" value={money(m.avgWin)} tone="text-emerald-600" />
+        <Stat label="Avg losing day" value={money(m.avgLoss)} tone="text-rose-600" />
         <Stat
           label="Expectancy / trade"
-          value={signed(m.expectancy)}
-          tone={pnlColor(m.expectancy)}
+          value={money(m.expectancy)}
+          tone={pnlColor(m.expectancy ?? 0)}
         />
-        <Stat label="Best day" value={signed(m.bestDay)} tone="text-emerald-600" />
-        <Stat label="Worst day" value={signed(m.worstDay)} tone="text-rose-600" />
-        <Stat label="Return on capital" value={`${((m.totalPnl / capital) * 100).toFixed(2)}%`} />
+        <Stat label="Best day" value={money(m.bestDay)} tone={pnlColor(m.bestDay ?? 0)} />
+        <Stat label="Worst day" value={money(m.worstDay)} tone={pnlColor(m.worstDay ?? 0)} />
+        <Stat label="Return on capital" value={percent(m.returnPct)} />
       </div>
 
-      <div className="grid xl:grid-cols-2 gap-4">
-        <Panel title="Equity curve">
+      <div className={styles.positionsGrid}>
+        <Panel title="Realized equity · Daily close">
           <div className="h-64 p-3">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={curve}>
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#64748b" }} minTickGap={50} />
-                <YAxis tick={{ fontSize: 10, fill: "#64748b" }} width={60} />
-                <Tooltip contentStyle={tip} />
+                <YAxis
+                  domain={["auto", "auto"]}
+                  tickFormatter={(value) => num(Number(value), 0)}
+                  tick={{ fontSize: 10, fill: "#64748b" }}
+                  width={85}
+                />
+                <Tooltip contentStyle={tip} formatter={(value) => inr(Number(value), 2)} />
                 <Area
-                  type="monotone"
+                  type="linear"
                   dataKey="equity"
                   stroke="#22c55e"
                   fill="#22c55e22"
+                  dot={curve.length === 1}
                   isAnimationActive={false}
                 />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </Panel>
-        <Panel title="Drawdown">
+        <Panel title="Daily closing drawdown (₹)">
           <div className="h-64 p-3">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={curve}>
                 <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#64748b" }} minTickGap={50} />
                 <YAxis tick={{ fontSize: 10, fill: "#64748b" }} width={60} />
-                <Tooltip contentStyle={tip} />
+                <Tooltip contentStyle={tip} formatter={(value) => inr(Number(value), 2)} />
                 <Area
-                  type="monotone"
+                  type="linear"
                   dataKey="drawdown"
                   stroke="#f43f5e"
                   fill="#f43f5e22"
+                  dot={curve.length === 1}
                   isAnimationActive={false}
                 />
               </AreaChart>
@@ -97,7 +110,7 @@ export default function PerformanceView({ days, capital }: { days: DayResult[]; 
             <BarChart data={days}>
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#64748b" }} minTickGap={50} />
               <YAxis tick={{ fontSize: 10, fill: "#64748b" }} width={60} />
-              <Tooltip contentStyle={tip} />
+              <Tooltip contentStyle={tip} formatter={(value) => inr(Number(value), 2)} />
               <Bar dataKey="pnl" isAnimationActive={false}>
                 {days.map((d) => (
                   <Cell key={d.date} fill={d.pnl >= 0 ? "#22c55e" : "#f43f5e"} />

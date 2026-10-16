@@ -1,301 +1,508 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import Link from "next/link";
-import {
-  Area,
-  AreaChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-} from "recharts";
-import { useTerminal, pnlOf } from "@/lib/terminal/store";
+import { TrendingUp, Wallet, List, Trophy, ShieldCheck, ChevronDown } from "lucide-react";
+import { useTerminal, pnlOf, type Result } from "@/lib/terminal/store";
 import { inr, num, pnlColor, signed } from "@/lib/terminal/format";
-import { Badge, Empty, Panel, Stat, td, tdr, th, thr } from "@/components/terminal";
-import { TrendingUp, Wallet, List, Trophy, MoreVertical, ShieldCheck } from "lucide-react";
+import { Badge, Empty, Panel, Stat, td, tdr, th, thr, btn } from "@/components/terminal";
+import { NiftyChart } from "@/components/terminal/NiftyChart";
+import { ExecutionLog } from "@/components/terminal/ExecutionLog";
+import type { Rule, Strategy } from "@/types";
+import styles from "./dashboard.module.css";
+
+function Rules({ rules, fallback }: { rules?: Rule[]; fallback: string }) {
+  return (
+    <div className="space-y-1 mt-2">
+      {rules?.length ? (
+        rules.map((r, i) => (
+          <p key={i}>
+            {i > 0 && <strong className="text-blue-600 mr-1">{r.connector ?? "AND"}</strong>}
+            {r.indicator} {r.operator} {r.value}
+          </p>
+        ))
+      ) : (
+        <p className="text-slate-400">{fallback}</p>
+      )}
+    </div>
+  );
+}
 
 export default function Overview() {
   const t = useTerminal();
-  const [curve, setCurve] = useState<{ time: string; pnl: number }[]>([]);
-  const [lastNow, setLastNow] = useState("");
-
-  if (t.now !== lastNow && t.now !== "--:--:--") {
-    setLastNow(t.now);
-    setCurve((c) => [...c, { time: t.now, pnl: Math.round(t.dayPnl) }].slice(-120));
-  }
-
-  const wins = t.closed.filter((c) => c.pnl > 0).length;
-  const winRate = t.closed.length ? (wins / t.closed.length) * 100 : 0;
-  const lossUsed = Math.min(100, Math.max(0, (-t.dayPnl / t.risk.maxDailyLoss) * 100));
-
-  const longPositions = t.positions.filter((p) => p.side === "BUY").length;
-  const shortPositions = t.positions.filter((p) => p.side === "SELL").length;
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [selected, setSelected] = useState("all");
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [notice, setNotice] = useState<Result | null>(null);
+  const stats = Object.values(t.strategyStats);
+  const trades = stats.reduce((n, s) => n + s.trades, 0);
+  const wins = stats.reduce((n, s) => n + s.wins, 0);
+  const running = t.strategies.filter((s) => s.status === "running").length;
+  const lossUsed =
+    t.risk.maxDailyLoss > 0
+      ? Math.min(100, Math.max(0, (-t.dayPnl / t.risk.maxDailyLoss) * 100))
+      : 0;
+  const positions = t.positions.filter((p) => selected === "all" || p.strategyId === selected);
+  const closed = t.closed.filter((c) => selected === "all" || c.strategyId === selected);
+  const enabled = t.ready && t.connection === "online";
+  const nameOf = (id: string) =>
+    t.strategies.find((s) => s.id === id)?.name ?? (id ? "Removed strategy" : "Manual trade");
+  const perform = async (key: string, command: () => Promise<Result>) => {
+    if (pending.has(key)) return;
+    setPending((p) => new Set(p).add(key));
+    try {
+      setNotice(await command());
+    } catch {
+      setNotice({ ok: false, message: "The action failed. Please retry." });
+    } finally {
+      setPending((p) => {
+        const next = new Set(p);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
 
   return (
-    <div className="max-w-[1600px] w-full mx-auto flex flex-col space-y-6 text-slate-900 pb-8">
-      <div className="flex justify-between items-end mb-4">
+    <div className="max-w-[1600px] w-full mx-auto space-y-5 text-slate-900 pb-8">
+      <div className="flex flex-wrap justify-between items-end gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 mb-0.5">Welcome back, Trader! 👋</h1>
-          <p className="text-slate-500 text-[13px]">Your algorithms are running smoothly.</p>
+          <h1 className="text-xl font-bold mb-1">Trading dashboard</h1>
+          <p className="text-xs text-slate-500">
+            {t.ready
+              ? `${running} of ${t.strategies.length} strategies running · ${t.mode === "paper" ? "Paper trading" : "Live trading"} · ${t.marketOpen ? "Market open" : "Market closed"}`
+              : "Connecting to your trading engine…"}
+          </p>
         </div>
-        <div className="text-slate-500 text-xs font-medium">
-          Wed, 7 Oct 2024 &nbsp;&nbsp; 5:36 PM
+        <div className="text-xs text-slate-500 text-right">
+          <Badge tone={t.connection === "online" ? "green" : "amber"}>{t.connection}</Badge>
+          <p className="mt-1">
+            {t.marketDate} {t.now !== "--:--:--" ? t.now : ""} {t.ready && "IST"}
+          </p>
         </div>
       </div>
+      {t.connection === "offline" && (
+        <p role="alert" className="rounded-xl bg-amber-50 text-amber-800 p-3 text-xs">
+          Backend disconnected. Displayed trading data may be out of date; reconnecting
+          automatically.
+        </p>
+      )}
+      {(t.killed || t.lossLimitHit) && (
+        <p role="alert" className="rounded-xl bg-rose-50 text-rose-700 p-3 text-xs">
+          {t.lossLimitHit ? "Daily loss limit reached." : "Kill switch is engaged."} New entries are
+          blocked.{" "}
+          <Link href="/terminal/risk" className="underline">
+            Review risk controls
+          </Link>
+        </p>
+      )}
+      {notice && (
+        <div
+          role={notice.ok ? "status" : "alert"}
+          className={`rounded-xl p-3 text-xs flex justify-between gap-3 ${notice.ok ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}
+        >
+          {notice.message}
+          <button aria-label="Dismiss action message" onClick={() => setNotice(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+      <div className={styles.summaryGrid}>
         <Stat
           label="Day P&L"
-          value={signed(t.dayPnl)}
-          tone="text-emerald-600"
-          sub={<span className="text-emerald-600">+1.28% Today</span>}
-          icon={<TrendingUp className="w-6 h-6 text-emerald-500" />}
+          value={t.ready ? signed(t.dayPnl, 2) : "—"}
+          tone={pnlColor(t.dayPnl)}
+          sub={`Realized today: ${signed(t.realizedPnl, 2)}`}
+          icon={<TrendingUp className="w-5 h-5 text-emerald-500" />}
         />
         <Stat
           label="Open P&L"
-          value={signed(t.openPnl)}
-          tone="text-emerald-600"
-          sub={<span className="text-emerald-600">+0.72%</span>}
-          icon={<Wallet className="w-6 h-6 text-blue-500" />}
+          value={t.ready ? signed(t.openPnl, 2) : "—"}
+          tone={pnlColor(t.openPnl)}
+          sub="Unrealized across all open positions"
+          icon={<Wallet className="w-5 h-5 text-blue-500" />}
         />
         <Stat
           label="Open Positions"
-          value={t.positions.length.toString()}
-          tone="text-slate-800"
-          sub={
-            <span className="text-slate-500 font-normal">
-              {longPositions} Long &nbsp;|&nbsp; {shortPositions} Short
-            </span>
-          }
-          icon={<List className="w-6 h-6 text-purple-500" />}
+          value={t.ready ? t.positions.length : "—"}
+          sub={`${t.positions.filter((p) => p.side === "BUY").length} Long · ${t.positions.filter((p) => p.side === "SELL").length} Short`}
+          icon={<List className="w-5 h-5 text-purple-500" />}
         />
         <Stat
-          label="Win Rate"
-          value={t.closed.length ? `${winRate.toFixed(0)}%` : "0%"}
-          tone="text-slate-800"
-          sub={
-            <span className="text-slate-500 font-normal">
-              {wins} / {t.closed.length || 0} trades
-            </span>
-          }
-          icon={<Trophy className="w-6 h-6 text-amber-500" />}
+          label="Win Rate · All time"
+          value={trades ? `${((wins / trades) * 100).toFixed(1)}%` : "—"}
+          sub={`${wins} wins / ${trades} closed trades`}
+          icon={<Trophy className="w-5 h-5 text-amber-500" />}
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-        <div className="lg:col-span-2">
-          <Panel>
-            <div className="px-4 py-2.5 border-b border-slate-50 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="bg-blue-50 p-1 rounded-md">
-                  <BarChartIcon className="w-4 h-4 text-blue-600" />
-                </div>
-                <h2 className="text-[13px] font-bold text-slate-800">NIFTY 50</h2>
-                <div className="text-xs font-semibold text-slate-700">
-                  24,932.10 <span className="text-emerald-500">+302.40 (+1.23%)</span>
-                </div>
-              </div>
-              <div className="flex gap-1 text-[11px] font-semibold">
-                <button className="px-3 py-1 bg-blue-600 text-white rounded">1D</button>
-                <button className="px-3 py-1 text-slate-500 hover:bg-slate-100 rounded">1W</button>
-                <button className="px-3 py-1 text-slate-500 hover:bg-slate-100 rounded">1M</button>
-                <button className="px-3 py-1 text-slate-500 hover:bg-slate-100 rounded">3M</button>
-              </div>
+      <div className="flex justify-end">
+        <label className="text-xs text-slate-500 flex items-center gap-2">
+          Positions & trade history
+          <select
+            aria-label="Filter positions and trades by strategy"
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            className="bg-white border border-slate-200 rounded-lg p-2 text-slate-800 max-w-60"
+          >
+            <option value="all">All strategies & manual trades</option>
+            {t.strategies.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className={styles.positionsGrid}>
+        <Panel
+          title={`Strategies (${t.strategies.length})`}
+          right={
+            <Link
+              href="/terminal/strategies"
+              className="text-xs text-blue-600 font-semibold hover:underline"
+            >
+              Manage strategies
+            </Link>
+          }
+        >
+          <p className="px-6 pb-3 text-xs text-slate-500">
+            Every saved strategy, its positions and performance. Expand a row for rules, parameters
+            and execution details. Realized P&L is net of fees across the full saved history.
+          </p>
+          {!t.strategies.length ? (
+            <Empty
+              text={
+                t.ready
+                  ? "No strategies saved. Create a strategy to get started."
+                  : "Loading strategies…"
+              }
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 border-y border-slate-100">
+                  <tr>
+                    <th className={th}>Strategy / instrument</th>
+                    <th className={th}>Status</th>
+                    <th className={thr}>Positions</th>
+                    <th className={thr}>Open P&L</th>
+                    <th className={thr}>Realized P&L</th>
+                    <th className={thr}>Today P&L</th>
+                    <th className={thr}>Trades / win rate</th>
+                    <th className={thr}>Controls</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {t.strategies.map((s) => {
+                    const sp = t.positions.filter((p) => p.strategyId === s.id);
+                    const open = sp.reduce((n, p) => n + pnlOf(p), 0);
+                    const summary = t.strategyStats[s.id];
+                    const day = (summary?.dayRealizedPnl ?? 0) + open;
+                    return (
+                      <Fragment key={s.id}>
+                        <tr className="hover:bg-slate-50/60">
+                          <td className={td}>
+                            <button
+                              aria-expanded={expanded === s.id}
+                              onClick={() => setExpanded(expanded === s.id ? null : s.id)}
+                              className="flex items-center gap-2 text-left"
+                            >
+                              <ChevronDown
+                                className={`w-4 h-4 shrink-0 transition-transform ${expanded === s.id ? "rotate-180" : ""}`}
+                              />
+                              <span>
+                                <span className="block font-semibold text-slate-900">{s.name}</span>
+                                <span className="block mt-1 text-[11px] text-slate-400">
+                                  {s.instrument} · {s.timeframe} · {s.template} · {s.stage} · v
+                                  {s.version}
+                                </span>
+                              </span>
+                            </button>
+                          </td>
+                          <td className={td}>
+                            <Badge
+                              tone={
+                                s.status === "running"
+                                  ? "green"
+                                  : s.status === "paused"
+                                    ? "amber"
+                                    : "slate"
+                              }
+                            >
+                              {s.status}
+                            </Badge>
+                          </td>
+                          <td className={tdr}>
+                            <button
+                              onClick={() => setSelected(s.id)}
+                              className="text-blue-600 hover:underline"
+                              aria-label={`Show positions for ${s.name}`}
+                            >
+                              {sp.length} open
+                            </button>
+                          </td>
+                          <td className={`${tdr} ${pnlColor(open)}`}>{signed(open, 2)}</td>
+                          <td className={`${tdr} ${pnlColor(summary?.realizedPnl ?? 0)}`}>
+                            {signed(summary?.realizedPnl ?? 0, 2)}
+                          </td>
+                          <td className={`${tdr} ${pnlColor(day)}`}>{signed(day, 2)}</td>
+                          <td className={tdr}>
+                            {summary?.trades ?? 0} /{" "}
+                            {summary?.trades
+                              ? `${((summary.wins / summary.trades) * 100).toFixed(0)}%`
+                              : "—"}
+                          </td>
+                          <td className={tdr}>
+                            <div className="flex justify-end gap-1.5">
+                              <button
+                                disabled={
+                                  !enabled ||
+                                  pending.has(s.id) ||
+                                  (s.status !== "running" && t.killed)
+                                }
+                                onClick={() =>
+                                  void perform(s.id, () =>
+                                    t.setStrategyStatus(
+                                      s.id,
+                                      s.status === "running" ? "paused" : "running"
+                                    )
+                                  )
+                                }
+                                className={`${btn} bg-blue-50 text-blue-600 hover:bg-blue-100`}
+                              >
+                                {pending.has(s.id)
+                                  ? "Updating…"
+                                  : s.status === "running"
+                                    ? "Pause"
+                                    : s.status === "paused"
+                                      ? "Resume"
+                                      : "Start"}
+                              </button>
+                              {s.status !== "stopped" && (
+                                <button
+                                  disabled={!enabled || pending.has(s.id)}
+                                  onClick={() =>
+                                    void perform(s.id, () => t.setStrategyStatus(s.id, "stopped"))
+                                  }
+                                  className={`${btn} bg-slate-100 hover:bg-slate-200`}
+                                >
+                                  Stop
+                                </button>
+                              )}
+                              <Link
+                                href={`/terminal/strategies/${s.id}`}
+                                className={`${btn} text-slate-500 hover:bg-slate-100`}
+                              >
+                                Edit
+                              </Link>
+                            </div>
+                          </td>
+                        </tr>
+                        {expanded === s.id && (
+                          <tr>
+                            <td colSpan={8} className="px-6 py-4 bg-slate-50/60">
+                              <StrategyDetails strategy={s} />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
+          )}
+        </Panel>
 
-            <div className="p-3" style={{ height: 280 }}>
-              {curve.length < 2 ? (
-                <Empty text="Collecting ticks..." />
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={curve}>
-                    <defs>
-                      <linearGradient id="pl" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#10b981" stopOpacity={0.2} />
-                        <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis
-                      dataKey="time"
-                      tick={{ fontSize: 11, fill: "#64748b" }}
-                      minTickGap={40}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      tick={{ fontSize: 11, fill: "#64748b" }}
-                      domain={["auto", "auto"]}
-                      width={50}
-                      orientation="right"
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        background: "#fff",
-                        border: "1px solid #e2e8f0",
-                        borderRadius: "8px",
-                        fontSize: 12,
-                        boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1)",
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="pnl"
-                      stroke="#10b981"
-                      strokeWidth={2}
-                      fill="url(#pl)"
-                      isAnimationActive={false}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
+        <Panel
+          title={`Open Positions (${positions.length})`}
+          right={
+            <Link href="/terminal/trading" className="text-xs text-blue-600 hover:underline">
+              Trading terminal
+            </Link>
+          }
+        >
+          {!positions.length ? (
+            <Empty
+              text={
+                t.ready
+                  ? selected === "all"
+                    ? "No open positions. Positions appear here when a strategy or manual order opens a trade."
+                    : "No open positions for this strategy."
+                  : "Loading positions…"
+              }
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-slate-50 border-y border-slate-100">
+                  <tr>
+                    {[
+                      "Symbol / strategy",
+                      "Side",
+                      "Qty",
+                      "Avg. price",
+                      "LTP",
+                      "Stop loss",
+                      "Target",
+                      "P&L",
+                      "Action",
+                    ].map((h, i) => (
+                      <th key={h} className={i < 2 ? th : thr}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {positions.map((p) => (
+                    <tr key={p.id}>
+                      <td className={td}>
+                        <span className="font-bold">{p.symbol}</span>
+                        <span className="block text-[11px] text-slate-400 mt-1">
+                          {nameOf(p.strategyId)} · {p.openedAt}
+                        </span>
+                      </td>
+                      <td className={td}>
+                        <Badge tone={p.side === "BUY" ? "green" : "red"}>{p.side}</Badge>
+                      </td>
+                      <td className={tdr}>{p.qty}</td>
+                      <td className={tdr}>{num(p.avg)}</td>
+                      <td className={tdr}>{num(p.ltp)}</td>
+                      <td className={tdr}>{p.sl > 0 ? num(p.sl) : "—"}</td>
+                      <td className={tdr}>{p.target > 0 ? num(p.target) : "—"}</td>
+                      <td className={`${tdr} font-bold ${pnlColor(pnlOf(p))}`}>
+                        {signed(pnlOf(p), 2)}
+                      </td>
+                      <td className={tdr}>
+                        <button
+                          disabled={!enabled || pending.has(p.id)}
+                          onClick={() => void perform(p.id, () => t.closePosition(p.id))}
+                          className={`${btn} bg-rose-50 text-rose-600 hover:bg-rose-100`}
+                        >
+                          {pending.has(p.id) ? "Exiting…" : "Exit position"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </Panel>
+          )}
+        </Panel>
+      </div>
+
+      <div className={styles.positionsGrid}>
+        <div className="min-w-0">
+          <NiftyChart />
         </div>
-
-        <div className="flex flex-col gap-4">
-          <section className="bg-white border border-slate-100 shadow-sm rounded-xl overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-slate-50 flex items-center justify-between">
-              <h2 className="text-[13px] font-bold text-slate-800 flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-blue-600" />
-                Daily Loss Limit
-              </h2>
-              <Link
-                href="/terminal/risk"
-                className="text-[11px] font-semibold text-blue-600 hover:underline"
-              >
-                Manage
-              </Link>
-            </div>
-            <div className="px-4 py-3 space-y-2">
-              <div className="flex justify-between items-center text-xs">
-                <span className="font-medium text-slate-500">Used</span>
-                <span className="font-bold text-slate-900">
-                  {inr(Math.max(0, -t.dayPnl))}{" "}
-                  <span className="text-slate-400 font-normal">/ {inr(t.risk.maxDailyLoss)}</span>
+        <Panel
+          title={
+            <>
+              <ShieldCheck className="w-4 h-4 text-blue-600" /> Risk & account
+            </>
+          }
+          right={
+            <Link href="/terminal/risk" className="text-xs text-blue-600 hover:underline">
+              Manage
+            </Link>
+          }
+        >
+          <div className="px-6 pb-5 text-xs space-y-4">
+            <div>
+              <div className="flex justify-between mb-2">
+                <span className="text-slate-500">Daily loss used</span>
+                <span>
+                  {inr(Math.max(0, -t.dayPnl))} / {inr(t.risk.maxDailyLoss)}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden relative">
-                  <div
-                    className={`h-full absolute left-0 top-0 rounded-full ${lossUsed > 75 ? "bg-rose-500" : lossUsed > 40 ? "bg-amber-500" : "bg-emerald-500"}`}
-                    style={{ width: `${Math.max(2, lossUsed)}%` }}
-                  />
-                </div>
-                <span className="text-[10px] font-semibold text-slate-500">
-                  {lossUsed.toFixed(0)}%
-                </span>
+              <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                <div
+                  className={`h-full ${lossUsed > 75 ? "bg-rose-500" : "bg-emerald-500"}`}
+                  style={{ width: `${lossUsed}%` }}
+                />
               </div>
-              <p className="text-[10px] text-slate-400">
-                At the limit, all strategies will be stopped automatically.
+              <p className="text-slate-400 text-[11px] mt-2">
+                {lossUsed.toFixed(1)}% of daily loss limit. The engine enforces this limit
+                automatically.
               </p>
             </div>
-          </section>
-
-          <section className="bg-white border border-slate-100 shadow-sm rounded-xl overflow-hidden flex-1 flex flex-col min-h-0">
-            <div className="px-4 py-2.5 border-b border-slate-50 flex items-center justify-between">
-              <h2 className="text-[13px] font-bold text-slate-800 flex items-center gap-1.5">
-                <BarChartIcon className="w-4 h-4 text-blue-600" />
-                Strategies <span className="text-blue-600">({t.strategies.length})</span>
-              </h2>
-              <Link
-                href="/terminal/strategies"
-                className="text-[11px] font-semibold text-blue-600 hover:underline"
-              >
-                Manage
-              </Link>
-            </div>
-            <ul className="divide-y divide-slate-50 flex-1 overflow-y-auto">
-              {t.strategies.map((s) => (
-                <li
-                  key={s.id}
-                  className="px-4 py-2 flex items-center justify-between gap-2 hover:bg-slate-50/50"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div
-                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.status === "running" ? "bg-emerald-500" : "bg-slate-300"}`}
-                    />
-                    <div className="font-semibold text-slate-900 text-xs truncate">{s.name}</div>
-                    <div className="text-[10px] text-slate-400 whitespace-nowrap">
-                      {s.instrument} · {s.timeframe}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <div className="text-xs font-bold text-emerald-600">+₹ 0</div>
-                    <button className="text-slate-400 hover:text-slate-600">
-                      <MoreVertical className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </li>
+            <dl className="space-y-3">
+              {[
+                ["Configured capital", inr(t.risk.totalCapital)],
+                ["Capital per trade limit", inr(t.risk.maxCapitalPerTrade)],
+                ["Position capacity", `${t.positions.length} / ${t.risk.maxOpenPositions}`],
+                ["Auto square-off", `${t.risk.autoSquareOffTime} IST`],
+                ["Execution feed", t.feedKind],
+                ["Kill switch", t.killed ? "Engaged" : "Off"],
+              ].map(([label, value]) => (
+                <div className="flex justify-between gap-3" key={label}>
+                  <dt className="text-slate-500">{label}</dt>
+                  <dd className="font-medium text-right">{value}</dd>
+                </div>
               ))}
-            </ul>
-          </section>
-        </div>
+            </dl>
+          </div>
+        </Panel>
       </div>
 
       <Panel
-        title={
-          <div className="flex items-center gap-2">
-            <div className="bg-blue-50 p-1 rounded-md">
-              <BarChartIcon className="w-4 h-4 text-blue-600" />
-            </div>
-            Open Positions <span className="text-blue-600">({t.positions.length})</span>
-          </div>
-        }
+        title={`Recent closed trades (${closed.length})`}
         right={
-          <Link
-            href="/terminal/trading"
-            className="text-[11px] font-semibold text-blue-600 hover:underline"
-          >
-            View All
+          <Link href="/terminal/analytics" className="text-xs text-blue-600 hover:underline">
+            Analytics
           </Link>
         }
       >
-        {t.positions.length === 0 ? (
-          <Empty text="No open positions" />
+        <p className="px-6 pb-3 text-[11px] text-slate-400">
+          Latest 200 closed trades across the account; strategy filter applies to this list.
+          Performance totals above include the complete saved history.
+        </p>
+        {!closed.length ? (
+          <Empty text="No closed trades for this selection." />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50/80 border-y border-slate-100">
+          <div className="overflow-auto max-h-96">
+            <table className="w-full">
+              <thead className="bg-slate-50 sticky top-0">
                 <tr>
-                  <th className={th}>Symbol</th>
-                  <th className={th}>Type</th>
-                  <th className={thr}>Qty</th>
-                  <th className={thr}>Avg. Price</th>
-                  <th className={thr}>LTP</th>
-                  <th className={thr}>P&amp;L</th>
-                  <th className={thr}>Actions</th>
+                  {[
+                    "Symbol / strategy",
+                    "Closed at (IST)",
+                    "Side",
+                    "Qty",
+                    "Entry",
+                    "Exit",
+                    "Fees",
+                    "Net P&L",
+                    "Exit reason",
+                  ].map((h, i) => (
+                    <th key={h} className={i < 3 || i === 8 ? th : thr}>
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {t.positions.map((p) => (
-                  <tr key={p.id} className="hover:bg-slate-50/50">
-                    <td className={`${td} font-bold text-slate-900`}>{p.symbol}</td>
+                {closed.map((c) => (
+                  <tr key={c.id}>
                     <td className={td}>
-                      <Badge tone={p.side === "BUY" ? "green" : "red"}>{p.side}</Badge>
+                      <span className="font-semibold">{c.symbol}</span>
+                      <span className="block text-[11px] text-slate-400 mt-1">
+                        {nameOf(c.strategyId)}
+                      </span>
                     </td>
-                    <td className={tdr}>{p.qty}</td>
-                    <td className={tdr}>{num(p.avg)}</td>
-                    <td className={tdr}>{num(p.ltp)}</td>
-                    <td
-                      className={`${tdr} font-bold ${pnlColor(pnlOf(p)).replace("text-emerald-400", "text-emerald-600").replace("text-rose-400", "text-rose-600")}`}
-                    >
-                      {signed(pnlOf(p))}
+                    <td className={td}>
+                      {c.tradeDate} {c.closedAt}
                     </td>
-                    <td className={tdr}>
-                      <div className="flex justify-end items-center gap-2">
-                        <button className="px-2.5 py-0.5 bg-blue-50 text-blue-600 text-[11px] font-semibold rounded hover:bg-blue-100 transition-colors">
-                          Exit
-                        </button>
-                        <button className="p-1 text-slate-400 hover:text-slate-600">
-                          <MoreVertical className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
+                    <td className={td}>{c.side}</td>
+                    <td className={tdr}>{c.qty}</td>
+                    <td className={tdr}>{num(c.entry)}</td>
+                    <td className={tdr}>{num(c.exit)}</td>
+                    <td className={tdr}>{inr(c.fees, 2)}</td>
+                    <td className={`${tdr} ${pnlColor(c.pnl)}`}>{signed(c.pnl, 2)}</td>
+                    <td className={td}>{c.reason}</td>
                   </tr>
                 ))}
               </tbody>
@@ -307,23 +514,86 @@ export default function Overview() {
   );
 }
 
-function BarChartIcon(props: React.SVGProps<SVGSVGElement>) {
+function StrategyDetails({ strategy: s }: { strategy: Strategy }) {
   return (
-    <svg
-      {...props}
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <line x1="12" x2="12" y1="20" y2="10" />
-      <line x1="18" x2="18" y1="20" y2="4" />
-      <line x1="6" x2="6" y1="20" y2="16" />
-    </svg>
+    <div className="text-xs">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <div>
+          <h3 className="font-semibold">Entry conditions</h3>
+          <Rules
+            rules={s.entryRules}
+            fallback={
+              s.template === "ORB"
+                ? "Native opening range breakout rules; see saved parameters."
+                : "No custom entry conditions saved."
+            }
+          />
+          <h3 className="font-semibold mt-4">Exit conditions</h3>
+          <Rules
+            rules={s.exitRules}
+            fallback="No optional exit rules. Saved stop, target and square-off settings apply."
+          />
+        </div>
+        <div>
+          <h3 className="font-semibold mb-2">Saved parameters</h3>
+          <dl className="space-y-1.5">
+            {Object.entries(s.params).map(([key, value]) => (
+              <div key={key} className="flex justify-between gap-3">
+                <dt className="text-slate-500 break-all">{key.replace(/([A-Z])/g, " $1")}</dt>
+                <dd className="font-medium">{String(value)}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+        <div>
+          <h3 className="font-semibold mb-2">Execution status</h3>
+          {Object.keys(s.execution ?? {}).length ? (
+            <div className="space-y-3 max-h-64 overflow-auto">
+              {Object.entries(s.execution ?? {}).map(([symbol, state]) => (
+                <div key={symbol}>
+                  <strong>{symbol}</strong>
+                  <p className="text-slate-500 mt-1">
+                    {state.message ?? "Waiting for a new completed candle."}
+                  </p>
+                  {state.lastCandle && (
+                    <p className="text-slate-400 mt-1">
+                      Last evaluated:{" "}
+                      {new Date(state.lastCandle * 1000).toLocaleString("en-IN", {
+                        timeZone: "Asia/Kolkata",
+                      })}{" "}
+                      IST
+                    </p>
+                  )}
+                  {state.conditions?.map((c, i) => (
+                    <p className="mt-1" key={i}>
+                      {c.indicator}: {c.left === null ? "Waiting" : num(c.left)} {c.operator}{" "}
+                      {c.value}: {c.right === null ? "Waiting" : num(c.right)} ·{" "}
+                      <span
+                        className={
+                          c.matched === null
+                            ? "text-slate-400"
+                            : c.matched
+                              ? "text-emerald-600"
+                              : "text-amber-600"
+                        }
+                      >
+                        {c.matched === null ? "Unavailable" : c.matched ? "Met" : "Not met"}
+                      </span>
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-slate-500">
+              {s.status === "running"
+                ? "Waiting for fresh market data and the next completed candle."
+                : `Strategy is ${s.status}. Start or resume to evaluate new entry signals.`}
+            </p>
+          )}
+        </div>
+      </div>
+      <ExecutionLog strategyId={s.id} />
+    </div>
   );
 }

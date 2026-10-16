@@ -13,6 +13,7 @@ import {
   ChevronRight,
   MoreVertical,
   Play,
+  Pause,
   Square,
   Pencil,
   Trash2,
@@ -25,8 +26,9 @@ import {
   Target,
   Zap,
 } from "lucide-react";
+import { ExecutionLog } from "@/components/terminal/ExecutionLog";
 import { useTerminal } from "@/lib/terminal/store";
-import { inr, signed } from "@/lib/terminal/format";
+import { inr, num, signed } from "@/lib/terminal/format";
 
 export default function Strategies() {
   const t = useTerminal();
@@ -195,7 +197,9 @@ export default function Strategies() {
             <div className="text-[11px] text-slate-500 font-medium">Best Performing</div>
             {bestPerforming ? (
               <>
-                <div className="text-sm font-bold mt-0.5 truncate text-slate-900">{bestPerforming.name}</div>
+                <div className="text-sm font-bold mt-0.5 truncate text-slate-900">
+                  {bestPerforming.name}
+                </div>
                 <div
                   className={`text-[10px] font-semibold mt-0.5 ${bestPerforming.pnl >= 0 ? "text-emerald-600" : "text-rose-600"}`}
                 >
@@ -278,7 +282,7 @@ export default function Strategies() {
                 <th className="py-3 px-4 text-center">Total Trades</th>
                 <th className="py-3 px-4 text-center">Win Rate</th>
                 <th className="py-3 px-4 text-center">Max DD</th>
-                <th className="py-3 px-4 text-center">Start / Stop</th>
+                <th className="py-3 px-4 text-center">Execution</th>
                 <th className="py-3 px-4 text-center">Actions</th>
               </tr>
             </thead>
@@ -294,13 +298,11 @@ export default function Strategies() {
                 const livePositions = t.positions.filter((p) => p.strategyId === row.id);
                 const closedTrades = t.closed.filter((c) => c.strategyId === row.id);
                 const strategyOrders = t.orders.filter((o) => o.strategyId === row.id);
-                const targetHits = closedTrades.filter((c) => c.reason?.toLowerCase().includes("target")).length;
-                const stopHits = closedTrades.filter((c) => c.reason?.toLowerCase().includes("stop")).length;
                 const isExpanded = expandedId === row.id;
-                const currentTab = detailsTab[row.id] || (livePositions.length > 0 ? "live" : "closed");
-                const anyRow = row as any;
-                const liveInd = anyRow.liveIndicators;
-                const currentPrice = anyRow.currentPrice || t.prices[row.instrument] || 0;
+                const currentTab =
+                  detailsTab[row.id] || (livePositions.length > 0 ? "live" : "closed");
+                const liveInd = row.liveIndicators;
+                const currentPrice = row.currentPrice || t.prices[row.instrument] || 0;
 
                 return (
                   <Fragment key={row.id}>
@@ -327,9 +329,6 @@ export default function Strategies() {
                           <div>
                             <div className="font-bold text-slate-900 group-hover:text-blue-600 transition-colors flex items-center gap-2">
                               {row.name}
-                              <span className="text-[10px] font-normal text-slate-400 group-hover:text-blue-500 underline underline-offset-2">
-                                {isExpanded ? "Hide Details" : "Click to view Live Trades & Outcomes"}
-                              </span>
                             </div>
                             <div className="text-slate-500 text-[11px] mt-0.5">
                               v{row.version} • {row.timeframe}
@@ -392,26 +391,40 @@ export default function Strategies() {
                       </td>
                       <td className="py-4 px-4 text-center text-slate-700">-%</td>
                       <td className="py-4 px-4 text-center" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() =>
-                            t.setStrategyStatus(
-                              row.id,
-                              row.status === "running" ? "stopped" : "running"
-                            )
-                          }
-                          title={row.status === "running" ? "Stop Strategy" : "Start Strategy"}
-                          className={`w-8 h-8 rounded-full flex items-center justify-center mx-auto transition-all shadow-sm ${
-                            row.status === "running"
-                              ? "bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white border border-rose-200"
-                              : "bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white border border-emerald-200"
-                          }`}
-                        >
-                          {row.status === "running" ? (
-                            <Square className="w-3.5 h-3.5 fill-current" />
-                          ) : (
-                            <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                        <div className="flex justify-center gap-2">
+                          {row.status !== "running" && (
+                            <button
+                              title={row.status === "paused" ? "Resume Strategy" : "Start Strategy"}
+                              aria-label={
+                                row.status === "paused" ? "Resume Strategy" : "Start Strategy"
+                              }
+                              className="p-2 rounded bg-emerald-50 text-emerald-700"
+                              onClick={() => t.setStrategyStatus(row.id, "running")}
+                            >
+                              <Play className="w-4 h-4" />
+                            </button>
                           )}
-                        </button>
+                          {row.status === "running" && (
+                            <button
+                              title="Pause new entries; keep protective exits"
+                              aria-label="Pause Strategy"
+                              className="p-2 rounded bg-amber-50 text-amber-700"
+                              onClick={() => t.setStrategyStatus(row.id, "paused")}
+                            >
+                              <Pause className="w-4 h-4" />
+                            </button>
+                          )}
+                          {row.status !== "stopped" && (
+                            <button
+                              title="Stop new entries; keep protective exits"
+                              aria-label="Stop Strategy"
+                              className="p-2 rounded bg-rose-50 text-rose-700"
+                              onClick={() => t.setStrategyStatus(row.id, "stopped")}
+                            >
+                              <Square className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td className="py-4 px-4 text-center" onClick={(e) => e.stopPropagation()}>
                         <button
@@ -457,20 +470,42 @@ export default function Strategies() {
                                 {liveInd ? (
                                   <div className="flex flex-wrap items-center gap-2 text-xs">
                                     <span className="bg-white/80 px-2.5 py-1 rounded-md border border-slate-200 font-semibold text-slate-700">
-                                      {liveInd.leftName}: <strong className="text-blue-600">{liveInd.leftValue}</strong>
+                                      {liveInd.leftName}:{" "}
+                                      <strong className="text-blue-600">
+                                        {liveInd.leftValue == null
+                                          ? "Warming up"
+                                          : num(liveInd.leftValue)}
+                                      </strong>
                                     </span>
                                     <span className="text-slate-500 font-medium">
                                       {liveInd.operator}
                                     </span>
                                     <span className="bg-white/80 px-2.5 py-1 rounded-md border border-slate-200 font-semibold text-slate-700">
-                                      {liveInd.rightName}: <strong className="text-purple-600">{liveInd.rightValue}</strong>
+                                      {liveInd.rightName}:{" "}
+                                      <strong className="text-purple-600">
+                                        {liveInd.rightValue == null
+                                          ? "Warming up"
+                                          : num(liveInd.rightValue)}
+                                      </strong>
                                     </span>
-                                    <span className={`px-2.5 py-1 rounded-md font-bold text-[11px] border ${
-                                      liveInd.armed
-                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                        : "bg-amber-50 text-amber-700 border-amber-200"
-                                    }`}>
-                                      {liveInd.armed ? "Armed: Waiting for Crossover" : "Monitoring Market (Lines Crossed)"}
+                                    <span
+                                      className={`px-2.5 py-1 rounded-md font-bold text-[11px] border ${
+                                        liveInd.leftValue != null &&
+                                        liveInd.rightValue != null &&
+                                        liveInd.armed
+                                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                          : "bg-amber-50 text-amber-700 border-amber-200"
+                                      }`}
+                                    >
+                                      {liveInd.leftValue == null || liveInd.rightValue == null
+                                        ? "Warming up: Waiting for complete candle history"
+                                        : row.status !== "running"
+                                          ? `Strategy ${row.status}`
+                                          : liveInd.armed
+                                            ? liveInd.operator.includes("cross")
+                                              ? "Armed: Waiting for Crossover"
+                                              : "Armed: Waiting for entry conditions"
+                                            : "Signal consumed: Waiting for conditions to reset"}
                                     </span>
                                   </div>
                                 ) : (
@@ -479,24 +514,15 @@ export default function Strategies() {
                                   </span>
                                 )}
                               </div>
-
-                              <div className="flex items-center gap-2">
-                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                  {targetHits} Target Hit 🎯
-                                </span>
-                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300">
-                                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-                                  {stopHits} Stop-Loss Hit 🛑
-                                </span>
-                              </div>
                             </div>
 
                             {/* Navigation Tabs */}
                             <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                               <div className="flex items-center gap-2">
                                 <button
-                                  onClick={() => setDetailsTab((prev) => ({ ...prev, [row.id]: "live" }))}
+                                  onClick={() =>
+                                    setDetailsTab((prev) => ({ ...prev, [row.id]: "live" }))
+                                  }
                                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
                                     currentTab === "live"
                                       ? "bg-blue-600 text-white shadow-sm"
@@ -507,7 +533,9 @@ export default function Strategies() {
                                   Live Trades ({livePositions.length})
                                 </button>
                                 <button
-                                  onClick={() => setDetailsTab((prev) => ({ ...prev, [row.id]: "closed" }))}
+                                  onClick={() =>
+                                    setDetailsTab((prev) => ({ ...prev, [row.id]: "closed" }))
+                                  }
                                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
                                     currentTab === "closed"
                                       ? "bg-blue-600 text-white shadow-sm"
@@ -518,7 +546,9 @@ export default function Strategies() {
                                   Executed Trades & Outcomes ({closedTrades.length})
                                 </button>
                                 <button
-                                  onClick={() => setDetailsTab((prev) => ({ ...prev, [row.id]: "orders" }))}
+                                  onClick={() =>
+                                    setDetailsTab((prev) => ({ ...prev, [row.id]: "orders" }))
+                                  }
                                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
                                     currentTab === "orders"
                                       ? "bg-blue-600 text-white shadow-sm"
@@ -531,13 +561,39 @@ export default function Strategies() {
                               </div>
 
                               <span className="text-[11px] text-slate-500">
-                                Timeframe: <strong>{row.timeframe}</strong> • Real Market Feed
+                                Timeframe: <strong>{row.timeframe}</strong> •{" "}
+                                {t.feedKind === "simulated" ? "Simulated data" : "Market data"} •
+                                Paper Trading
                               </span>
                             </div>
 
+                            <div className="my-3 space-y-3 text-xs">
+                              {Object.entries(row.execution ?? {}).map(([symbol, state]) => (
+                                <div
+                                  key={symbol}
+                                  className="rounded-lg border border-slate-200 bg-white p-3"
+                                >
+                                  <strong>{symbol}</strong> · {state.message ?? "Waiting for data"}
+                                  {state.conditions?.map((condition, i) => (
+                                    <p key={i} className="mt-1 text-slate-600">
+                                      {i ? (condition.connector ?? "AND") : "IF"}{" "}
+                                      {condition.indicator} ({condition.left ?? "warming up"}){" "}
+                                      {condition.operator} {condition.value} (
+                                      {condition.right ?? "warming up"}) ·{" "}
+                                      {condition.matched === null
+                                        ? "Waiting"
+                                        : condition.matched
+                                          ? "True"
+                                          : "False"}
+                                    </p>
+                                  ))}
+                                </div>
+                              ))}
+                              <ExecutionLog strategyId={row.id} />
+                            </div>
                             {/* TAB 1: Live Trades */}
-                            {currentTab === "live" && (
-                              livePositions.length > 0 ? (
+                            {currentTab === "live" &&
+                              (livePositions.length > 0 ? (
                                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
                                   <table className="w-full text-xs text-left">
                                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
@@ -556,34 +612,52 @@ export default function Strategies() {
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
                                       {livePositions.map((pos) => {
-                                        const pnl = (pos.ltp - pos.avg) * pos.qty * (pos.side === "BUY" ? 1 : -1);
+                                        const pnl =
+                                          (pos.ltp - pos.avg) *
+                                          pos.qty *
+                                          (pos.side === "BUY" ? 1 : -1);
                                         return (
                                           <tr key={pos.id} className="hover:bg-blue-50/20">
                                             <td className="py-3 px-4">
                                               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 animate-pulse">
-                                                <span className="w-2 h-2 rounded-full bg-emerald-500"></span> LIVE NOW
+                                                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>{" "}
+                                                LIVE NOW
                                               </span>
                                             </td>
-                                            <td className="py-3 px-4 font-bold text-slate-900">{pos.symbol}</td>
+                                            <td className="py-3 px-4 font-bold text-slate-900">
+                                              {pos.symbol}
+                                            </td>
                                             <td className="py-3 px-4">
-                                              <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${pos.side === "BUY" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                                              <span
+                                                className={`px-2 py-0.5 rounded text-[11px] font-bold ${pos.side === "BUY" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}
+                                              >
                                                 {pos.side}
                                               </span>
                                             </td>
-                                            <td className="py-3 px-4 font-semibold text-slate-800">{pos.qty}</td>
-                                            <td className="py-3 px-4 font-semibold text-slate-800">{inr(pos.avg)}</td>
-                                            <td className="py-3 px-4 font-bold text-blue-600">{inr(pos.ltp)}</td>
+                                            <td className="py-3 px-4 font-semibold text-slate-800">
+                                              {pos.qty}
+                                            </td>
+                                            <td className="py-3 px-4 font-semibold text-slate-800">
+                                              {inr(pos.avg)}
+                                            </td>
+                                            <td className="py-3 px-4 font-bold text-blue-600">
+                                              {inr(pos.ltp)}
+                                            </td>
                                             <td className="py-3 px-4">
                                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-rose-50 text-rose-700 font-bold border border-rose-200">
-                                                <ShieldAlert className="w-3.5 h-3.5 text-rose-500" /> {inr(pos.sl)}
+                                                <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />{" "}
+                                                {inr(pos.sl)}
                                               </span>
                                             </td>
                                             <td className="py-3 px-4">
                                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 font-bold border border-emerald-200">
-                                                <Target className="w-3.5 h-3.5 text-emerald-500" /> {inr(pos.target)}
+                                                <Target className="w-3.5 h-3.5 text-emerald-500" />{" "}
+                                                {inr(pos.target)}
                                               </span>
                                             </td>
-                                            <td className={`py-3 px-4 text-right font-bold text-sm ${pnl >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                                            <td
+                                              className={`py-3 px-4 text-right font-bold text-sm ${pnl >= 0 ? "text-emerald-600" : "text-rose-600"}`}
+                                            >
                                               {signed(pnl)}
                                             </td>
                                             <td className="py-3 px-4 text-center">
@@ -605,19 +679,20 @@ export default function Strategies() {
                                   <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-2">
                                     <Activity className="w-5 h-5" />
                                   </div>
-                                  <div className="font-bold text-sm text-slate-800">No Active Live Trades Right Now</div>
+                                  <div className="font-bold text-sm text-slate-800">
+                                    No Active Live Trades Right Now
+                                  </div>
                                   <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
                                     {row.status === "running"
-                                      ? "Strategy is actively running on real market data. When your crossover condition triggers on a live bar, the open trade with real-time Target and Stop-Loss tracking will appear here."
+                                      ? "Strategy is evaluating completed candles. When all configured entry rules match, paper positions and their stop-loss and target levels appear here."
                                       : "Strategy is currently stopped. Click 'Play' above to start monitoring and paper trading."}
                                   </p>
                                 </div>
-                              )
-                            )}
+                              ))}
 
                             {/* TAB 2: Executed Trades (Target / Stoploss / Squareoff) */}
-                            {currentTab === "closed" && (
-                              closedTrades.length > 0 ? (
+                            {currentTab === "closed" &&
+                              (closedTrades.length > 0 ? (
                                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
                                   <table className="w-full text-xs text-left">
                                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
@@ -636,37 +711,57 @@ export default function Strategies() {
                                       {closedTrades.map((c) => {
                                         const isTarget = c.reason?.toLowerCase().includes("target");
                                         const isStop = c.reason?.toLowerCase().includes("stop");
-                                        const isSquareOff = c.reason?.toLowerCase().includes("square");
-                                        const isRule = c.reason?.toLowerCase().includes("rule") || c.reason?.toLowerCase().includes("custom");
+                                        const isSquareOff = c.reason
+                                          ?.toLowerCase()
+                                          .includes("square");
+                                        const isRule =
+                                          c.reason?.toLowerCase().includes("rule") ||
+                                          c.reason?.toLowerCase().includes("custom");
 
                                         return (
                                           <tr key={c.id} className="hover:bg-slate-50/70">
-                                            <td className="py-3 px-4 font-medium text-slate-500">{c.closedAt}</td>
-                                            <td className="py-3 px-4 font-bold text-slate-900">{c.symbol}</td>
+                                            <td className="py-3 px-4 font-medium text-slate-500">
+                                              {c.closedAt}
+                                            </td>
+                                            <td className="py-3 px-4 font-bold text-slate-900">
+                                              {c.symbol}
+                                            </td>
                                             <td className="py-3 px-4">
-                                              <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${c.side === "BUY" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                                              <span
+                                                className={`px-2 py-0.5 rounded text-[11px] font-bold ${c.side === "BUY" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}
+                                              >
                                                 {c.side}
                                               </span>
                                             </td>
-                                            <td className="py-3 px-4 font-semibold text-slate-800">{c.qty}</td>
-                                            <td className="py-3 px-4 font-semibold text-slate-800">{inr(c.entry)}</td>
-                                            <td className="py-3 px-4 font-semibold text-slate-800">{inr(c.exit)}</td>
+                                            <td className="py-3 px-4 font-semibold text-slate-800">
+                                              {c.qty}
+                                            </td>
+                                            <td className="py-3 px-4 font-semibold text-slate-800">
+                                              {inr(c.entry)}
+                                            </td>
+                                            <td className="py-3 px-4 font-semibold text-slate-800">
+                                              {inr(c.exit)}
+                                            </td>
                                             <td className="py-3 px-4">
                                               {isTarget ? (
                                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 shadow-2xs">
-                                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Target Hit 🎯
+                                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />{" "}
+                                                  Target Hit 🎯
                                                 </span>
                                               ) : isStop ? (
                                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300 shadow-2xs">
-                                                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600" /> Stop-Loss Hit 🛑
+                                                  <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />{" "}
+                                                  Stop-Loss Hit 🛑
                                                 </span>
                                               ) : isSquareOff ? (
                                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs">
-                                                  <Clock className="w-3.5 h-3.5 text-amber-600" /> Auto Square-Off ⏰
+                                                  <Clock className="w-3.5 h-3.5 text-amber-600" />{" "}
+                                                  Auto Square-Off ⏰
                                                 </span>
                                               ) : isRule ? (
                                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-300 shadow-2xs">
-                                                  <Zap className="w-3.5 h-3.5 text-blue-600" /> Exit Rule Satisfied ⚡
+                                                  <Zap className="w-3.5 h-3.5 text-blue-600" /> Exit
+                                                  Rule Satisfied ⚡
                                                 </span>
                                               ) : (
                                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
@@ -674,7 +769,9 @@ export default function Strategies() {
                                                 </span>
                                               )}
                                             </td>
-                                            <td className={`py-3 px-4 text-right font-bold text-sm ${c.pnl >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                                            <td
+                                              className={`py-3 px-4 text-right font-bold text-sm ${c.pnl >= 0 ? "text-emerald-600" : "text-rose-600"}`}
+                                            >
                                               {signed(c.pnl)}
                                             </td>
                                           </tr>
@@ -688,17 +785,20 @@ export default function Strategies() {
                                   <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-2">
                                     <History className="w-5 h-5" />
                                   </div>
-                                  <div className="font-bold text-sm text-slate-800">No Executed Trades Yet</div>
+                                  <div className="font-bold text-sm text-slate-800">
+                                    No Executed Trades Yet
+                                  </div>
                                   <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                                    When the strategy enters and exits trades (hitting Target Profit, Stop-Loss, or Square-off), they will be logged here with complete execution outcome details.
+                                    When the strategy enters and exits trades (hitting Target
+                                    Profit, Stop-Loss, or Square-off), they will be logged here with
+                                    complete execution outcome details.
                                   </p>
                                 </div>
-                              )
-                            )}
+                              ))}
 
                             {/* TAB 3: Orders Log */}
-                            {currentTab === "orders" && (
-                              strategyOrders.length > 0 ? (
+                            {currentTab === "orders" &&
+                              (strategyOrders.length > 0 ? (
                                 <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
                                   <table className="w-full text-xs text-left">
                                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
@@ -716,28 +816,42 @@ export default function Strategies() {
                                     <tbody className="divide-y divide-slate-100">
                                       {strategyOrders.map((o) => (
                                         <tr key={o.id} className="hover:bg-slate-50/70">
-                                          <td className="py-2.5 px-4 font-medium text-slate-500">{o.time}</td>
-                                          <td className="py-2.5 px-4 font-bold text-slate-900">{o.symbol}</td>
+                                          <td className="py-2.5 px-4 font-medium text-slate-500">
+                                            {o.time}
+                                          </td>
+                                          <td className="py-2.5 px-4 font-bold text-slate-900">
+                                            {o.symbol}
+                                          </td>
                                           <td className="py-2.5 px-4">
-                                            <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${o.side === "BUY" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+                                            <span
+                                              className={`px-2 py-0.5 rounded text-[11px] font-bold ${o.side === "BUY" ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}
+                                            >
                                               {o.side}
                                             </span>
                                           </td>
                                           <td className="py-2.5 px-4 text-slate-600">{o.type}</td>
-                                          <td className="py-2.5 px-4 font-semibold text-slate-800">{o.qty}</td>
-                                          <td className="py-2.5 px-4 font-semibold text-slate-800">{inr(o.price)}</td>
+                                          <td className="py-2.5 px-4 font-semibold text-slate-800">
+                                            {o.qty}
+                                          </td>
+                                          <td className="py-2.5 px-4 font-semibold text-slate-800">
+                                            {inr(o.price)}
+                                          </td>
                                           <td className="py-2.5 px-4">
-                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                              o.status === "COMPLETE"
-                                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                                : o.status === "REJECTED"
-                                                ? "bg-rose-50 text-rose-700 border border-rose-200"
-                                                : "bg-slate-100 text-slate-600"
-                                            }`}>
+                                            <span
+                                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                                o.status === "COMPLETE"
+                                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                                  : o.status === "REJECTED"
+                                                    ? "bg-rose-50 text-rose-700 border border-rose-200"
+                                                    : "bg-slate-100 text-slate-600"
+                                              }`}
+                                            >
                                               {o.status}
                                             </span>
                                           </td>
-                                          <td className="py-2.5 px-4 text-slate-600 font-medium">{o.note || "-"}</td>
+                                          <td className="py-2.5 px-4 text-slate-600 font-medium">
+                                            {o.note || "-"}
+                                          </td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -748,13 +862,15 @@ export default function Strategies() {
                                   <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-2">
                                     <ListChecks className="w-5 h-5" />
                                   </div>
-                                  <div className="font-bold text-sm text-slate-800">No Orders Placed Yet</div>
+                                  <div className="font-bold text-sm text-slate-800">
+                                    No Orders Placed Yet
+                                  </div>
                                   <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                                    Market and limit orders generated by this strategy will appear here.
+                                    Market and limit orders generated by this strategy will appear
+                                    here.
                                   </p>
                                 </div>
-                              )
-                            )}
+                              ))}
                           </div>
                         </td>
                       </tr>
@@ -810,7 +926,9 @@ export default function Strategies() {
               const strId = menuAnchor.id;
               const targetStr = t.strategies.find((s) => s.id === strId);
               setMenuAnchor(null);
-              if (confirm(`Are you sure you want to delete "${targetStr?.name || "this strategy"}"?`)) {
+              if (
+                confirm(`Are you sure you want to delete "${targetStr?.name || "this strategy"}"?`)
+              ) {
                 t.deleteStrategy(strId);
               }
             }}

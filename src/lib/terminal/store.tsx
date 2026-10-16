@@ -20,6 +20,8 @@ import type {
   RiskLimits,
   Side,
   Strategy,
+  StrategyStats,
+  RiskStatus,
 } from "./types";
 
 interface OrderRequest {
@@ -50,8 +52,10 @@ interface Snapshot {
   positions: Position[];
   orders: Order[];
   closed: ClosedTrade[];
+  strategyStats: Record<string, StrategyStats>;
   alerts: Alert[];
   risk: RiskLimits;
+  riskStatus?: RiskStatus;
   openPnl: number;
   realizedPnl: number;
   dayPnl: number;
@@ -73,8 +77,10 @@ interface TerminalState {
   positions: Position[];
   orders: Order[];
   closed: ClosedTrade[];
+  strategyStats: Record<string, StrategyStats>;
   alerts: Alert[];
   risk: RiskLimits;
+  riskStatus?: RiskStatus;
   now: string;
   openPnl: number;
   realizedPnl: number;
@@ -119,6 +125,7 @@ const DEFAULT_TERMINAL_STATE: TerminalState = {
   positions: [],
   orders: [],
   closed: [],
+  strategyStats: {},
   alerts: [],
   risk: EMPTY_RISK,
   now: "",
@@ -261,8 +268,10 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
     positions,
     orders: snap?.orders ?? [],
     closed: snap?.closed ?? [],
+    strategyStats: snap?.strategyStats ?? {},
     alerts,
     risk: snap?.risk ?? EMPTY_RISK,
+    riskStatus: snap?.riskStatus,
     now: snap?.marketTime ?? "--:--:--",
     openPnl: snap?.openPnl ?? 0,
     realizedPnl: snap?.realizedPnl ?? 0,

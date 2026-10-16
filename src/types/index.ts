@@ -9,13 +9,14 @@ export interface Rule {
   indicator: string;
   operator: string;
   value: string;
+  connector?: "AND" | "OR";
 }
 
 export interface LiveIndicatorStatus {
   leftName: string;
-  leftValue: number;
+  leftValue: number | null;
   rightName: string;
-  rightValue: number;
+  rightValue: number | null;
   operator: string;
   lastCandleTime: string;
   candleClose: number;
@@ -36,6 +37,18 @@ export interface Strategy {
   exitRules?: Rule[];
   currentPrice?: number;
   liveIndicators?: LiveIndicatorStatus;
+  execution?: Record<
+    string,
+    {
+      message?: string;
+      lastCandle?: number;
+      conditions?: (Rule & {
+        left: number | null;
+        right: number | null;
+        matched: boolean | null;
+      })[];
+    }
+  >;
 }
 
 export interface Position {
@@ -76,6 +89,14 @@ export interface ClosedTrade {
   fees: number;
   reason: string;
   closedAt: string;
+  tradeDate?: string;
+}
+
+export interface StrategyStats {
+  trades: number;
+  wins: number;
+  realizedPnl: number;
+  dayRealizedPnl: number;
 }
 
 export interface AlertItem {
@@ -92,8 +113,22 @@ export interface RiskConfig {
   maxCapitalPerTrade: number;
   totalCapital: number;
   autoSquareOffTime: string;
+  riskPerTradePct?: number;
+  maxDrawdownPct?: number;
+  maxTradesPerDay?: number;
+  strategyLimits?: Record<string, { maxDailyLoss: number | null; maxOpenPositions: number | null }>;
 }
 export type RiskLimits = RiskConfig;
+
+export interface RiskStatus {
+  entriesToday: number;
+  drawdownAmount: number;
+  drawdownPct: number;
+  drawdownLimitHit: boolean;
+  tradeLimitHit: boolean;
+  trackingStartedAt: string;
+  strategies: Record<string, { dayPnl: number; positions: number; blocked: boolean }>;
+}
 
 export interface FeedStatus {
   kind: "real_market" | "simulated" | "broker";
@@ -112,8 +147,10 @@ export interface TerminalSnapshot {
   positions: Position[];
   orders: Order[];
   closed: ClosedTrade[];
+  strategyStats: Record<string, StrategyStats>;
   alerts: AlertItem[];
   risk: RiskConfig;
+  riskStatus?: RiskStatus;
   openPnl: number;
   realizedPnl: number;
   dayPnl: number;

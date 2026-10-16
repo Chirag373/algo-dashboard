@@ -24,6 +24,12 @@ async def run_loop(engine: TradingEngine, hub: Hub) -> None:
     while True:
         await asyncio.sleep(1)
         try:
+            if hasattr(engine.feed, "set_symbols"):
+                symbols = {p["symbol"] for p in engine.positions} | {o["symbol"] for o in engine.pending}
+                for strategy in engine.strategies:
+                    if strategy["status"] in {"running", "paused"}:
+                        symbols.update(engine._universe(strategy["instrument"]))
+                engine.feed.set_symbols(symbols, engine.strategies)
             engine.on_tick(engine.feed.next())
             await hub.broadcast({"type": "snapshot", "data": engine.snapshot()})
         except asyncio.CancelledError:
@@ -42,7 +48,7 @@ async def lifespan(app: FastAPI):
     hub = Hub()
     app.state.engine, app.state.hub = engine, hub
     task = asyncio.create_task(run_loop(engine, hub))
-    log.info("Engine started (feed=%s, live_enabled=%s)", feed.kind, settings.LIVE_ENABLED)
+    log.info("Engine started (feed=%s, live_enabled=%s)", feed.kind, engine.live_enabled)
     try:
         yield
     finally:
@@ -52,6 +58,8 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         engine.save()
+        if hasattr(feed, "close"):
+            feed.close()
 
 
 def get_application() -> FastAPI:

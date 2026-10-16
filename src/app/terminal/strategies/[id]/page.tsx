@@ -1,44 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Plus, X, Search, Sparkles, ArrowLeft } from "lucide-react";
+import { Plus, X, ArrowLeft } from "lucide-react";
 import { useTerminal } from "@/lib/terminal/store";
 import { Empty, Panel, Select, inputCls } from "@/components/terminal";
+import { api } from "@/lib/terminal/api";
+import { INDICATOR_TYPES, OPERATORS_LIST, STANDARD_TIMEFRAMES } from "@/config/defaults";
 import type { ParamValue, Rule, Strategy } from "@/lib/terminal/types";
-
-const STANDARD_TIMEFRAMES = [
-  { value: "1m", label: "1m (1 Minute)" },
-  { value: "5m", label: "5m (5 Minutes)" },
-  { value: "15m", label: "15m (15 Minutes)" },
-  { value: "30m", label: "30m (30 Minutes)" },
-  { value: "1h", label: "1h (1 Hour)" },
-  { value: "4h", label: "4h (4 Hours)" },
-  { value: "custom", label: "Custom Timeframe..." },
-];
-
-const OPERATORS_LIST = [
-  "crosses above",
-  "crosses below",
-  "greater than",
-  "less than",
-  "is above",
-  "is below",
-  "equals",
-];
-
-const INDICATOR_TYPES = [
-  { value: "EMA", label: "EMA", hasPeriod: true, defaultPeriod: 9 },
-  { value: "SMA", label: "SMA", hasPeriod: true, defaultPeriod: 20 },
-  { value: "RSI", label: "RSI", hasPeriod: true, defaultPeriod: 14 },
-  { value: "Price", label: "Price (Close)", hasPeriod: false },
-  { value: "Opening Range High", label: "Opening Range High", hasPeriod: false },
-  { value: "Opening Range Low", label: "Opening Range Low", hasPeriod: false },
-  { value: "VWAP", label: "VWAP", hasPeriod: false },
-  { value: "Supertrend", label: "Supertrend", hasPeriod: false },
-  { value: "Number", label: "Fixed Number / Value", hasPeriod: false, isNumber: true },
-];
 
 // Helper to parse indicator string into { type, period }
 function parseIndicatorField(raw: string) {
@@ -48,11 +18,17 @@ function parseIndicatorField(raw: string) {
   if (match) {
     return {
       type: match[1].toUpperCase(),
-      period: match[2] ? Number(match[2]) : match[1].toUpperCase() === "EMA" ? 9 : 20,
+      period: match[2]
+        ? Number(match[2])
+        : match[1].toUpperCase() === "EMA"
+          ? 9
+          : match[1].toUpperCase() === "RSI"
+            ? 14
+            : 20,
     };
   }
   // Check if it's purely a number
-  if (/^\d+(\.\d+)?$/.test(str)) {
+  if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(str)) {
     return { type: "Number", period: Number(str) };
   }
   // Standard indicator without period
@@ -66,7 +42,7 @@ function parseIndicatorField(raw: string) {
 function formatIndicatorString(type: string, period?: number | string) {
   if (type === "Number") return String(period ?? 0);
   if (["EMA", "SMA", "RSI"].includes(type)) {
-    return `${type} ${period ?? (type === "EMA" ? 9 : 20)}`;
+    return `${type} ${period ?? (type === "EMA" ? 9 : type === "RSI" ? 14 : 20)}`;
   }
   return type;
 }
@@ -91,9 +67,25 @@ function RuleBuilder({ rules, onChange }: { rules: Rule[]; onChange: (r: Rule[])
                 key={i}
                 className="flex flex-wrap items-center gap-2.5 bg-slate-50 p-3.5 rounded-xl border border-slate-200 shadow-sm"
               >
-                <span className="text-xs font-bold text-slate-500 w-9 text-center">
-                  {i === 0 ? "IF" : "AND"}
-                </span>
+                {i === 0 ? (
+                  <span className="text-xs font-bold text-slate-500 w-9 text-center">IF</span>
+                ) : (
+                  <Select
+                    className="w-20"
+                    value={r.connector ?? "AND"}
+                    onChange={(connector) =>
+                      onChange(
+                        rules.map((x, j) =>
+                          j === i ? { ...x, connector: connector as "AND" | "OR" } : x
+                        )
+                      )
+                    }
+                    options={[
+                      { value: "AND", label: "AND" },
+                      { value: "OR", label: "OR" },
+                    ]}
+                  />
+                )}
 
                 {/* Left Side: Indicator Selection */}
                 <div className="flex items-center gap-1.5">
@@ -101,11 +93,11 @@ function RuleBuilder({ rules, onChange }: { rules: Rule[]; onChange: (r: Rule[])
                     className="w-[140px]"
                     value={leftParsed.type}
                     onChange={(val) => {
-                      const def = INDICATOR_TYPES.find((t) => t.value === val)?.defaultPeriod ?? leftParsed.period;
+                      const def =
+                        INDICATOR_TYPES.find((t) => t.value === val)?.defaultPeriod ??
+                        leftParsed.period;
                       const newInd = formatIndicatorString(val, def);
-                      onChange(
-                        rules.map((x, j) => (j === i ? { ...x, indicator: newInd } : x))
-                      );
+                      onChange(rules.map((x, j) => (j === i ? { ...x, indicator: newInd } : x)));
                     }}
                     options={INDICATOR_TYPES.map((o) => ({ value: o.value, label: o.label }))}
                   />
@@ -115,10 +107,11 @@ function RuleBuilder({ rules, onChange }: { rules: Rule[]; onChange: (r: Rule[])
                     <div className="relative w-16">
                       <input
                         type="number"
-                        min="1"
+                        min={leftParsed.type === "Number" ? undefined : 1}
+                        step={leftParsed.type === "Number" ? "any" : 1}
                         className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs text-slate-800 font-bold focus:outline-none focus:border-blue-500 text-center shadow-sm"
                         placeholder={leftParsed.type === "EMA" ? "9" : "20"}
-                        value={leftParsed.period || ""}
+                        value={leftParsed.period}
                         onChange={(e) => {
                           const num = Number(e.target.value);
                           const newInd = formatIndicatorString(leftParsed.type, num);
@@ -147,7 +140,9 @@ function RuleBuilder({ rules, onChange }: { rules: Rule[]; onChange: (r: Rule[])
                     className="w-[140px]"
                     value={rightParsed.type}
                     onChange={(val) => {
-                      const def = INDICATOR_TYPES.find((t) => t.value === val)?.defaultPeriod ?? (val === "EMA" ? 21 : 20);
+                      const def =
+                        INDICATOR_TYPES.find((t) => t.value === val)?.defaultPeriod ??
+                        (val === "EMA" ? 21 : 20);
                       const newVal = formatIndicatorString(val, def);
                       onChange(rules.map((x, j) => (j === i ? { ...x, value: newVal } : x)));
                     }}
@@ -159,10 +154,11 @@ function RuleBuilder({ rules, onChange }: { rules: Rule[]; onChange: (r: Rule[])
                     <div className="relative w-16">
                       <input
                         type="number"
-                        min="1"
+                        min={rightParsed.type === "Number" ? undefined : 1}
+                        step={rightParsed.type === "Number" ? "any" : 1}
                         className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs text-slate-800 font-bold focus:outline-none focus:border-blue-500 text-center shadow-sm"
                         placeholder={rightParsed.type === "EMA" ? "21" : "20"}
-                        value={rightParsed.period || ""}
+                        value={rightParsed.period}
                         onChange={(e) => {
                           const num = Number(e.target.value);
                           const newVal = formatIndicatorString(rightParsed.type, num);
@@ -226,7 +222,7 @@ export default function StrategyEditor() {
           squareOffTime: "15:15",
         },
         entryRules: [emptyRule()],
-        exitRules: [{ indicator: "EMA 21", operator: "crosses below", value: "EMA 9" }],
+        exitRules: [],
       }
   );
   const [touched, setTouched] = useState(false);
@@ -234,13 +230,23 @@ export default function StrategyEditor() {
   const [serverError, setServerError] = useState<string | null>(null);
 
   // Alpaca assets state
-  const [alpacaAssets, setAlpacaAssets] = useState<{ symbol: string; name: string }[]>([]);
-  const [assetSearch, setAssetSearch] = useState("");
+  const [alpacaAssets, setAlpacaAssets] = useState<
+    { symbol: string; name: string; exchange?: string }[]
+  >([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
 
   // Custom timeframe state
   const [customTf, setCustomTf] = useState("");
-  const isCustomTimeframe = !["1m", "5m", "15m", "30m", "1h", "4h"].includes(form.timeframe);
+  const [customSelected, setCustomSelected] = useState(false);
+  const loadedId = useRef(existing?.id);
+  useEffect(() => {
+    if (existing && loadedId.current !== existing.id) {
+      loadedId.current = existing.id;
+      setForm(existing);
+    }
+  }, [existing]);
+  const isCustomTimeframe =
+    customSelected || !["1m", "5m", "15m", "30m", "1h", "4h"].includes(form.timeframe);
 
   // Load Alpaca assets on mount
   useEffect(() => {
@@ -248,14 +254,12 @@ export default function StrategyEditor() {
     async function loadAssets() {
       setLoadingAssets(true);
       try {
-        const res = await fetch("http://localhost:8001/api/v1/assets?limit=250");
-        if (res.ok) {
-          const data = await res.json();
-          if (active && data.assets) {
-            setAlpacaAssets(data.assets);
-          }
-        }
-      } catch (err) {
+        const data = await api<{ assets: { symbol: string; name: string; exchange?: string }[] }>(
+          "GET",
+          "/assets?limit=250"
+        );
+        if (active) setAlpacaAssets(data.assets);
+      } catch {
         // Fallback default
       } finally {
         if (active) setLoadingAssets(false);
@@ -267,14 +271,7 @@ export default function StrategyEditor() {
     };
   }, []);
 
-  // Filter or search Alpaca assets dynamically
-  const filteredAssets = useMemo(() => {
-    if (!assetSearch.trim()) return alpacaAssets;
-    const q = assetSearch.toLowerCase();
-    return alpacaAssets.filter(
-      (a) => a.symbol.toLowerCase().includes(q) || a.name.toLowerCase().includes(q)
-    );
-  }, [alpacaAssets, assetSearch]);
+  const filteredAssets = alpacaAssets;
 
   const instrumentOptions = useMemo(() => {
     const indianIndices = [
@@ -359,6 +356,12 @@ export default function StrategyEditor() {
     if (!form.name.trim()) e.push("Name is required");
     if (form.entryRules && form.entryRules.length === 0)
       e.push("At least one entry condition is required");
+    if (!Number.isInteger(Number(form.params.quantity)) || Number(form.params.quantity) <= 0)
+      e.push("Quantity must be a positive integer");
+    if (Number(form.params.stopLossPercent ?? form.params.stopLoss) <= 0)
+      e.push("Stop loss must be positive");
+    if (Number(form.params.targetPercent ?? form.params.targetProfit) <= 0)
+      e.push("Target profit must be positive");
     return e;
   }, [form]);
 
@@ -369,11 +372,26 @@ export default function StrategyEditor() {
       </Panel>
     );
   }
-  if (existing?.status === "running") {
+  if (existing && existing.template !== "Custom") {
+    return (
+      <Panel>
+        <div className="p-6 space-y-3 text-sm text-slate-600">
+          <p>
+            {existing.template} uses its dedicated execution settings. Create a Custom strategy to
+            configure visual conditions.
+          </p>
+          <Link href="/terminal/strategies/new" className="text-blue-600">
+            Create a Custom strategy
+          </Link>
+        </div>
+      </Panel>
+    );
+  }
+  if (existing && existing.status !== "stopped") {
     return (
       <Panel>
         <div className="p-6 text-sm text-slate-500 space-y-3 text-center">
-          <p>This strategy is currently running. You must stop it before editing.</p>
+          <p>Stop this strategy and close its positions before editing.</p>
           <Link
             href="/terminal/strategies"
             className="inline-block px-4 py-2 bg-slate-100 text-slate-800 rounded-lg font-medium hover:bg-slate-200"
@@ -398,20 +416,17 @@ export default function StrategyEditor() {
         ...form,
         name: form.name.trim(),
         template: form.template || "Custom",
-        timeframe: isCustomTimeframe ? (customTf.trim() || form.timeframe) : form.timeframe,
+        timeframe: isCustomTimeframe ? customTf.trim() || form.timeframe : form.timeframe,
         params: {
           ...form.params,
-          quantity: Number(form.params.quantity || 100),
-          stopLossPercent: Number(form.params.stopLoss || form.params.stopLossPercent || 1),
-          targetPercent: Number(form.params.targetProfit || form.params.targetPercent || 2),
+          quantity: Number(form.params.quantity ?? 100),
+          stopLossPercent: Number(form.params.stopLossPercent ?? form.params.stopLoss ?? 1),
+          targetPercent: Number(form.params.targetPercent ?? form.params.targetProfit ?? 2),
           perTradeAmount: Math.max(100, Number(form.params.quantity || 100) * 100),
           squareOffTime: (form.params.squareOffTime as string) || "15:15",
         },
         entryRules: form.entryRules && form.entryRules.length > 0 ? form.entryRules : [emptyRule()],
-        exitRules:
-          form.exitRules && form.exitRules.length > 0
-            ? form.exitRules
-            : [{ indicator: "EMA 21", operator: "crosses below", value: "EMA 9" }],
+        exitRules: form.exitRules ?? [],
       };
       const res = await t.saveStrategy(payload, isNew);
       if (res.ok) {
@@ -419,8 +434,8 @@ export default function StrategyEditor() {
       } else {
         setServerError(res.message);
       }
-    } catch (err: any) {
-      setServerError(err.message || "Failed to save strategy");
+    } catch (err) {
+      setServerError(err instanceof Error ? err.message : "Failed to save strategy");
     } finally {
       setSaving(false);
     }
@@ -483,7 +498,28 @@ export default function StrategyEditor() {
               <Select
                 searchable
                 value={form.instrument}
-                onChange={(val) => setForm({ ...form, instrument: val })}
+                onChange={(val) => {
+                  const us =
+                    [
+                      "SPY",
+                      "QQQ",
+                      "AAPL",
+                      "MSFT",
+                      "NVDA",
+                      "TSLA",
+                      "AMZN",
+                      "GOOGL",
+                      "META",
+                    ].includes(val) ||
+                    alpacaAssets.some(
+                      (a) => a.symbol === val && !["NSE", "BSE"].includes(a.exchange ?? "")
+                    );
+                  setForm({
+                    ...form,
+                    instrument: val,
+                    params: { ...form.params, market: us ? "US" : "IN" },
+                  });
+                }}
                 options={instrumentOptions}
               />
               <div className="text-[11px] text-slate-400 pt-1">
@@ -503,9 +539,10 @@ export default function StrategyEditor() {
               <Select
                 value={isCustomTimeframe ? "custom" : form.timeframe}
                 onChange={(val) => {
+                  setCustomSelected(val === "custom");
                   if (val === "custom") {
-                    setCustomTf(form.timeframe || "10m");
-                    setForm({ ...form, timeframe: form.timeframe || "10m" });
+                    setCustomTf("10m");
+                    setForm({ ...form, timeframe: "10m" });
                   } else {
                     setForm({ ...form, timeframe: val });
                   }
@@ -543,7 +580,8 @@ export default function StrategyEditor() {
             <span className="text-blue-600">4.</span> When should the strategy enter a trade?
           </h2>
           <p className="text-[13px] text-slate-500 ml-7 mt-1 mb-4">
-            Visual condition builder (Example: EMA 9 crosses above EMA 21)
+            Conditions use completed candles. AND is evaluated before OR. Opening range uses the
+            first candle of the selected timeframe; Supertrend uses ATR 10 × 3.
           </p>
           <div className="ml-7">
             <RuleBuilder
@@ -567,8 +605,8 @@ export default function StrategyEditor() {
                 type="number"
                 step="0.1"
                 className={inputCls}
-                value={form.params.stopLoss as number}
-                onChange={(e) => setParam("stopLoss", Number(e.target.value))}
+                value={Number(form.params.stopLossPercent ?? form.params.stopLoss ?? 1)}
+                onChange={(e) => setParam("stopLossPercent", Number(e.target.value))}
               />
             </div>
             <div className="space-y-1.5">
@@ -577,8 +615,8 @@ export default function StrategyEditor() {
                 type="number"
                 step="0.1"
                 className={inputCls}
-                value={form.params.targetProfit as number}
-                onChange={(e) => setParam("targetProfit", Number(e.target.value))}
+                value={Number(form.params.targetPercent ?? form.params.targetProfit ?? 2)}
+                onChange={(e) => setParam("targetPercent", Number(e.target.value))}
               />
             </div>
             <div className="space-y-1.5">
@@ -592,14 +630,26 @@ export default function StrategyEditor() {
             </div>
           </div>
         </div>
+        <div className="mt-8 ml-7 space-y-3">
+          <h3 className="font-semibold">Optional exit conditions</h3>
+          <p className="text-xs text-slate-500">
+            Stop loss and target always protect open positions, including while paused or stopped.
+          </p>
+          <RuleBuilder
+            rules={form.exitRules ?? []}
+            onChange={(rules) => setForm({ ...form, exitRules: rules })}
+          />
+          <p className="text-sm text-blue-700">
+            Saving automatically starts Paper Trading. One entry per signal; conditions must reset
+            before another entry.
+          </p>
+        </div>
       </Panel>
 
       {((touched && errors.length > 0) || serverError) && (
         <div className="p-4 bg-rose-50 text-rose-600 rounded-lg text-sm font-medium border border-rose-200">
           <ul className="list-disc pl-5 space-y-1">
-            {touched && errors.map((e, i) => (
-              <li key={i}>{e}</li>
-            ))}
+            {touched && errors.map((e, i) => <li key={i}>{e}</li>)}
             {serverError && <li>{serverError}</li>}
           </ul>
         </div>
@@ -618,7 +668,11 @@ export default function StrategyEditor() {
           disabled={saving}
           className="inline-flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-sm rounded-xl transition-all shadow-sm text-center"
         >
-          {saving ? "Saving..." : isNew ? "Create Strategy" : "Save Changes"}
+          {saving
+            ? "Saving..."
+            : isNew
+              ? "Create & Start Paper Trading"
+              : "Save & Start Paper Trading"}
         </button>
       </div>
     </div>

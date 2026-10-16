@@ -12,22 +12,18 @@ function KiteCallbackInner() {
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [message, setMessage] = useState("Exchanging token with Zerodha...");
 
+  const requestToken = searchParams.get("request_token");
+  const callbackError =
+    searchParams.get("status") === "error" || searchParams.get("action") === "error"
+      ? "Kite login was cancelled or failed. Please try again."
+      : !requestToken
+        ? "No request_token found in redirect URL. Please try logging in again."
+        : null;
+  const displayStatus = callbackError ? "error" : status;
+  const displayMessage = callbackError ?? message;
+
   useEffect(() => {
-    const requestToken = searchParams.get("request_token");
-    const action = searchParams.get("action");
-    const kiteStatus = searchParams.get("status");
-
-    if (kiteStatus === "error" || action === "error") {
-      setStatus("error");
-      setMessage("Kite login was cancelled or failed. Please try again.");
-      return;
-    }
-
-    if (!requestToken) {
-      setStatus("error");
-      setMessage("No request_token found in redirect URL. Please try logging in again.");
-      return;
-    }
+    if (callbackError || !requestToken) return;
 
     // Exchange request_token for access_token
     fetch(`${API}/kite/session`, {
@@ -49,7 +45,7 @@ function KiteCallbackInner() {
         setStatus("error");
         setMessage(err.message || "Failed to exchange token. Please try again.");
       });
-  }, [searchParams, router]);
+  }, [requestToken, callbackError, router]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -62,30 +58,30 @@ function KiteCallbackInner() {
           <span className="font-bold text-slate-800 text-lg">Kite Connect</span>
         </div>
 
-        {status === "loading" && (
+        {displayStatus === "loading" && (
           <>
             <Loader2 className="w-12 h-12 text-blue-500 animate-spin mx-auto" />
             <h2 className="text-lg font-bold text-slate-800">Connecting to Kite...</h2>
-            <p className="text-sm text-slate-500">{message}</p>
+            <p className="text-sm text-slate-500">{displayMessage}</p>
           </>
         )}
 
-        {status === "success" && (
+        {displayStatus === "success" && (
           <>
             <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
             <h2 className="text-lg font-bold text-slate-800">Connected Successfully!</h2>
-            <p className="text-sm text-slate-500">{message}</p>
+            <p className="text-sm text-slate-500">{displayMessage}</p>
             <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden mt-2">
               <div className="bg-emerald-500 h-full rounded-full" style={{ width: "100%" }} />
             </div>
           </>
         )}
 
-        {status === "error" && (
+        {displayStatus === "error" && (
           <>
             <XCircle className="w-12 h-12 text-rose-500 mx-auto" />
             <h2 className="text-lg font-bold text-slate-800">Connection Failed</h2>
-            <p className="text-sm text-slate-500 mb-4">{message}</p>
+            <p className="text-sm text-slate-500 mb-4">{displayMessage}</p>
 
             <div className="space-y-2">
               <p className="text-xs text-slate-400 font-medium">Try logging in again:</p>

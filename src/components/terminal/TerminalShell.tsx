@@ -13,10 +13,6 @@ import {
   WifiOff,
   X,
   TrendingUp,
-  Search,
-  HelpCircle,
-  Bell,
-  ChevronDown,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { TerminalProvider, useTerminal } from "@/lib/terminal/store";
@@ -35,7 +31,7 @@ function CommandBar() {
   const t = useTerminal();
 
   return (
-    <header className="h-14 shrink-0 bg-white border-b border-slate-100 flex items-center justify-between px-6 z-30">
+    <header className="h-14 shrink-0 bg-white border-b border-slate-100 flex items-center px-6 z-30">
       <div className="flex items-center gap-5">
         <Link
           href="/terminal"
@@ -67,43 +63,11 @@ function CommandBar() {
                 : "text-slate-500 hover:text-slate-900"
             }`}
           >
-            {t.mode === "live" && <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />}
+            {t.mode === "live" && (
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+            )}
             Live
           </button>
-        </div>
-      </div>
-
-      {/* Search Bar matching screenshot */}
-      <div className="flex-1 max-w-md mx-6 hidden sm:block">
-        <div className="relative flex items-center">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Search strategies, instruments, or help..."
-            className="w-full bg-slate-50/80 hover:bg-slate-100 focus:bg-white focus:ring-1 focus:ring-blue-500 rounded-full pl-9 pr-4 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 transition-all outline-none border border-slate-200"
-          />
-        </div>
-      </div>
-
-      {/* Right icons: Help, Bell, User Profile */}
-      <div className="flex items-center gap-3">
-        <button
-          className="w-8 h-8 rounded-full flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
-          title="Help & Documentation"
-        >
-          <HelpCircle className="w-4 h-4" />
-        </button>
-        <button
-          className="w-8 h-8 rounded-full flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors relative"
-          title="Notifications"
-        >
-          <Bell className="w-4 h-4" />
-        </button>
-        <div className="flex items-center gap-1.5 cursor-pointer pl-1 group">
-          <div className="w-7 h-7 rounded-full bg-blue-500 text-white font-bold text-xs flex items-center justify-center shadow-xs">
-            R
-          </div>
-          <ChevronDown className="w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-colors" />
         </div>
       </div>
     </header>

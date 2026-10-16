@@ -23,6 +23,8 @@ interface CandleBar {
   close: number;
 }
 
+type CandleHistory = Omit<CandleBar, "time"> & { time: string | number };
+
 export function LightweightChart({ symbol, height }: LightweightChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -41,6 +43,7 @@ export function LightweightChart({ symbol, height }: LightweightChartProps) {
         background: { type: ColorType.Solid, color: "transparent" },
         textColor: "#64748b", // slate-500
         fontSize: 11,
+        fontFamily: getComputedStyle(chartContainerRef.current).fontFamily,
       },
       grid: {
         vertLines: { color: "#f1f5f9" }, // slate-100
@@ -68,18 +71,19 @@ export function LightweightChart({ symbol, height }: LightweightChartProps) {
     seriesRef.current = series;
 
     // Fetch history
-    api<any>("GET", `/history/${encodeURIComponent(symbol)}`)
+    api<CandleHistory[] | { data?: CandleHistory[] }>(
+      "GET",
+      `/history/${encodeURIComponent(symbol)}`
+    )
       .then((res) => {
         if (!isMounted || !chartRef.current || !seriesRef.current) return;
-        const rawBars = Array.isArray(res) ? res : (res?.data || []);
+        const rawBars = Array.isArray(res) ? res : res?.data || [];
         if (rawBars.length > 0) {
           const formatted = rawBars
-            .map((bar: any) => {
+            .map((bar) => {
               let t = bar.time;
               if (typeof t === "string") {
-                const ts = Math.floor(
-                  Date.parse(t.includes("T") ? t : t.replace(" ", "T")) / 1000
-                );
+                const ts = Math.floor(Date.parse(t.includes("T") ? t : t.replace(" ", "T")) / 1000);
                 if (!isNaN(ts)) t = ts;
               }
               return {
@@ -90,8 +94,13 @@ export function LightweightChart({ symbol, height }: LightweightChartProps) {
                 close: Number(bar.close),
               };
             })
-            .sort((a: any, b: any) => (a.time > b.time ? 1 : -1))
-            .filter((b: any, idx: number, arr: any[]) => idx === 0 || b.time > arr[idx - 1].time);
+            .filter(
+              (bar) =>
+                typeof bar.time === "number" &&
+                [bar.time, bar.open, bar.high, bar.low, bar.close].every(Number.isFinite)
+            )
+            .sort((a, b) => Number(a.time) - Number(b.time))
+            .filter((b, idx, arr) => idx === 0 || Number(b.time) > Number(arr[idx - 1].time));
 
           if (formatted.length > 0 && isMounted && seriesRef.current) {
             try {

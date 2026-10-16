@@ -1,6 +1,16 @@
 @import "tailwindcss";
 
+:root {
+  /* OpenAI UI's system font stack, shared by every text style in this app. */
+  --font-app:
+    ui-sans-serif, -apple-system, system-ui, "Segoe UI", "Noto Sans", "Helvetica", "Arial",
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+}
+
 @theme inline {
+  --font-sans: var(--font-app);
+  --font-mono: var(--font-app);
+  --font-serif: var(--font-app);
   --color-orb-bg: #0b0f19;
   --color-orb-panel: #111827;
   --color-orb-panel-hover: #1f2937;
@@ -12,15 +22,28 @@
   --color-fin-accent: #22c55e;
 }
 
+html {
+  font-family: var(--font-app);
+}
+
 body {
-  font-family: var(--font-geist-sans), Arial, sans-serif;
+  font-family: inherit;
   background-color: #f8fafc;
   color: #0f172a;
 }
 
 .mono-nums {
-  font-family: var(--font-geist-mono), monospace;
+  font-family: var(--font-app);
   font-variant-numeric: tabular-nums;
+}
+
+:where(button, input, select, textarea, optgroup, option, pre, code, kbd, samp, svg, text) {
+  font-family: inherit;
+}
+
+input::placeholder,
+textarea::placeholder {
+  font-family: inherit;
 }
 
 /* Custom Scrollbars */

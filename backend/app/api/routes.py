@@ -1,4 +1,7 @@
-from fastapi import APIRouter, HTTPException, Request
+from typing import Literal
+from datetime import date
+
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.schemas import KillIn, ModeIn, OrderIn, RiskIn, StageIn, StatusIn, StrategyIn
 from app.services.engine import EngineError, TradingEngine
@@ -14,7 +17,8 @@ async def _run(request: Request, fn, *args):
     """Run an engine command, translate errors, push the new state to all clients."""
     engine = _engine(request)
     try:
-        result = fn(*args)
+        with engine.atomic():
+            result = fn(*args)
     except EngineError as e:
         # State may have changed even on failure (e.g. a rejected order is logged)
         await request.app.state.hub.broadcast({"type": "snapshot", "data": engine.snapshot()})
@@ -33,6 +37,38 @@ async def health(request: Request):
 @router.get("/state")
 async def state(request: Request):
     return _engine(request).snapshot()
+
+
+@router.get("/market/nifty")
+def get_nifty_chart(period: Literal["1D", "1W", "1M", "3M"] = "1D"):
+    from app.services.market_chart import nifty_chart
+    try:
+        return nifty_chart(period)
+    except Exception:
+        raise HTTPException(status_code=503, detail="NIFTY history is unavailable from the market data provider. Please retry shortly.") from None
+
+
+@router.get("/analytics")
+async def get_analytics(request: Request, strategy_id: str | None = None,
+                        date_from: date | None = None, date_to: date | None = None,
+                        page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)):
+    from app.services.analytics import performance
+    engine = _engine(request)
+    end = date_to or date.fromisoformat(engine.market_date)
+    if date_from and date_from > end:
+        raise HTTPException(status_code=422, detail="Start date must be on or before end date.")
+    rows = engine.db.analytics_trades(date_from.isoformat() if date_from else None, end.isoformat(), strategy_id)
+    capital = float(engine.risk["totalCapital"])
+    result = performance(rows, capital)
+    names = {s["id"]: s["name"] for s in engine.strategies}
+    options = engine.db.strategy_stats(engine.market_date)
+    strategy_ids = dict.fromkeys([*names, *options])
+    return {**result, "capital": capital, "dateFrom": date_from.isoformat() if date_from else None,
+            "dateTo": end.isoformat(), "page": page, "pageSize": page_size,
+            "totalTrades": len(rows), "totalPages": (len(rows) + page_size - 1) // page_size,
+            "strategies": [{"id": sid, "name": names.get(sid, "Manual trades" if sid in {"", "manual"} else f"Removed strategy ({sid})")} for sid in strategy_ids],
+            "trades": [{**t, "strategyName": names.get(t.get("strategyId"), "Manual trade" if t.get("strategyId") in {None, "", "manual"} else "Removed strategy")}
+                       for t in list(reversed(rows))[(page - 1) * page_size:page * page_size]]}
 
 
 # Top Indian Indices and Nifty 50 Bluechips
@@ -92,7 +128,7 @@ INDIAN_ASSETS = [
 
 
 @router.get("/history/{symbol}")
-async def get_history(symbol: str, request: Request, timeframe: str = "5m", limit: int = 100):
+def get_history(symbol: str, request: Request, timeframe: str = "5m", limit: int = 100):
     # Try real live/historical exchange candles first (Nifty, Bank Nifty, Indian stocks)
     try:
         from app.services.kite_backtest import fetch_historical_candles
@@ -186,7 +222,7 @@ async def get_history(symbol: str, request: Request, timeframe: str = "5m", limi
 _CACHED_ASSETS = []
 
 @router.get("/assets")
-async def get_assets(q: str = "", limit: int = 100):
+def get_assets(q: str = "", limit: int = 100):
     """Return searchable stock assets prioritizing Indian Nifty 50 and global equities."""
     global _CACHED_ASSETS
     from app.core.config import settings
@@ -233,61 +269,21 @@ async def get_assets(q: str = "", limit: int = 100):
 
 
 @router.get("/quote/{symbol}")
-async def get_quote(symbol: str):
-    """Return real-time quote (LTP, change, high, low) for any Indian or US asset."""
-    from app.services.kite_backtest import fetch_exchange_candles
+def get_quote(symbol: str):
+    from app.services.quotes import get_market_quote
     try:
-        candles = fetch_exchange_candles(symbol, "5m", 2)
-        if candles:
-            last = candles[-1]
-            prev = candles[-2] if len(c := candles) > 1 else last
-            ltp = last["close"]
-            prev_close = prev["close"]
-            chg = round(ltp - prev_close, 2)
-            pct = round((chg / prev_close) * 100, 2) if prev_close else 0.0
-            return {
-                "ok": True,
-                "symbol": symbol.upper(),
-                "ltp": ltp,
-                "chg": chg,
-                "pct": pct,
-                "high": last["high"],
-                "low": last["low"],
-                "open": last["open"],
-                "time": last["time"],
-            }
-    except Exception as e:
-        pass
-    return {"ok": False, "symbol": symbol.upper(), "ltp": 0, "chg": 0, "pct": 0}
+        return {"ok": True, **get_market_quote(symbol)}
+    except Exception:
+        return {"ok": False, "symbol": symbol.upper(), "ltp": 0, "chg": None, "pct": None, "previousClose": None}
 
 
 @router.get("/quotes")
-async def get_quotes(symbols: str = "NIFTY 50,BANKNIFTY,RELIANCE,TCS,HDFCBANK"):
-    """Return batch real-time quotes for multiple comma-separated symbols."""
-    from app.services.kite_backtest import fetch_exchange_candles
-    sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
-    results = {}
-    for s in sym_list:
-        try:
-            candles = fetch_exchange_candles(s, "5m", 2)
-            if candles:
-                last = candles[-1]
-                prev = candles[-2] if len(candles) > 1 else last
-                ltp = last["close"]
-                prev_close = prev["close"]
-                chg = round(ltp - prev_close, 2)
-                pct = round((chg / prev_close) * 100, 2) if prev_close else 0.0
-                results[s.upper()] = {
-                    "ltp": ltp,
-                    "chg": chg,
-                    "pct": pct,
-                    "high": last["high"],
-                    "low": last["low"],
-                    "time": last["time"],
-                }
-        except Exception:
-            pass
-    return {"ok": True, "quotes": results}
+def get_quotes(symbols: str = "NIFTY 50,BANKNIFTY,RELIANCE,TCS,HDFCBANK"):
+    from app.services.quotes import batch_quotes
+    requested = [s.strip() for s in symbols.split(",") if s.strip()]
+    if len(requested) > 50:
+        raise HTTPException(status_code=422, detail="Request up to 50 symbols at a time.")
+    return {"ok": True, "quotes": batch_quotes(requested)}
 
 
 @router.post("/orders")
@@ -371,3 +367,13 @@ async def strategy_status(sid: str, body: StatusIn, request: Request):
 async def strategy_stage(sid: str, body: StageIn, request: Request):
     e = _engine(request)
     return await _run(request, e.promote_strategy, sid, body.stage)
+
+
+@router.get("/strategies/{sid}/logs")
+async def strategy_logs(sid: str, request: Request, limit: int = 200):
+    engine = _engine(request)
+    try:
+        engine._find_strategy(sid)
+    except EngineError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from None
+    return {"logs": engine.db.execution_logs(sid, limit)}
