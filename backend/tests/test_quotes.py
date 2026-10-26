@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import patch
 from app.services import quotes
-from app.api.routes import get_quote, get_quotes
+from app.api.routes import get_quote, get_quotes, get_history
 
 
 def candle(time, close):
@@ -15,6 +15,23 @@ class QuoteTests(unittest.TestCase):
         self.candles = [candle("2026-10-15 15:25:00", 23000),
                         candle("2026-10-16 09:15:00", 23110),
                         candle("2026-10-16 09:19:32", 23125)]
+
+    def test_chart_requests_lifetime_without_100_candle_cap(self):
+        rows = [candle(i, 100) for i in range(1000)]
+        for timeframe in ["1m", "5m", "15m", "30m", "1h", "1d"]:
+            with patch("app.services.kite_backtest.fetch_historical_candles", return_value=rows) as fetch:
+                result = get_history("TCS", None, timeframe, 500000, 36525)
+                fetch.assert_called_once_with("TCS", timeframe, 36525)
+                self.assertEqual(len(result["data"]), 1000)
+
+    def test_lifetime_daily_provider_request_uses_max_range(self):
+        from app.services.kite_backtest import fetch_exchange_candles
+        with patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b'{"chart":{"result":[]}}'
+            fetch_exchange_candles("TCS", "1d", 36525)
+            url = urlopen.call_args.args[0].full_url
+            self.assertIn("range=max", url)
+            self.assertIn("interval=1d", url)
 
     def test_points_are_previous_session_close_not_previous_tick(self):
         result = quotes.quote_from_candles("NIFTY 50", list(reversed(self.candles)))

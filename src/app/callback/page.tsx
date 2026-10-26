@@ -4,7 +4,20 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
 
-const API = "http://localhost:8001/api/v1";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000/api/v1";
+const exchanges = new Map<string, Promise<{ ok?: boolean; detail?: string }>>();
+function exchangeToken(requestToken: string) {
+  let pending = exchanges.get(requestToken);
+  if (!pending) {
+    pending = fetch(`${API}/kite/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_token: requestToken }),
+    }).then((response) => response.json());
+    exchanges.set(requestToken, pending!);
+  }
+  return pending!;
+}
 
 function KiteCallbackInner() {
   const searchParams = useSearchParams();
@@ -25,26 +38,33 @@ function KiteCallbackInner() {
   useEffect(() => {
     if (callbackError || !requestToken) return;
 
-    // Exchange request_token for access_token
-    fetch(`${API}/kite/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ request_token: requestToken }),
-    })
-      .then((r) => r.json())
+    let active = true;
+    let redirect: ReturnType<typeof setTimeout>;
+    const savedReturn = sessionStorage.getItem("kiteReturnTo");
+    const returnTo = savedReturn === "/terminal/option-chain" ? savedReturn : "/terminal/backtest";
+    exchangeToken(requestToken)
       .then((data) => {
+        if (!active) return;
         if (data.ok) {
           setStatus("success");
-          setMessage("Kite connected successfully! Redirecting to backtest...");
-          setTimeout(() => router.push("/terminal/backtest"), 2000);
+          setMessage("Kite connected successfully! Returning to your page...");
+          redirect = setTimeout(() => {
+            sessionStorage.removeItem("kiteReturnTo");
+            router.replace(returnTo);
+          }, 1000);
         } else {
           throw new Error(data.detail || "Failed to get access token");
         }
       })
       .catch((err) => {
+        if (!active) return;
         setStatus("error");
         setMessage(err.message || "Failed to exchange token. Please try again.");
       });
+    return () => {
+      active = false;
+      clearTimeout(redirect);
+    };
   }, [requestToken, callbackError, router]);
 
   return (

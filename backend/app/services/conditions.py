@@ -26,16 +26,39 @@ def indicator(name):
     return register
 
 
+def split_operand_source(raw: str) -> tuple[str, str | None]:
+    """Split an optional reference source without changing legacy operands."""
+    pieces = raw.strip().split("@")
+    if len(pieces) == 1:
+        return pieces[0].strip(), None
+    if len(pieces) != 2 or not pieces[0].strip():
+        raise ConditionError("Use an indicator followed by @ VIX or @ USDINR")
+    source = pieces[1].strip().upper()
+    if source not in {"VIX", "USDINR"}:
+        raise ConditionError("Indicator source must be VIX or USDINR")
+    base = pieces[0].strip()
+    if base.upper() in {"VIX", "USDINR"}:
+        raise ConditionError("Select a price indicator for the reference source")
+    return base, source
+
+
+def operand_source(raw: str) -> str | None:
+    base, source = split_operand_source(raw)
+    return source or (base.upper() if base.upper() in {"VIX", "USDINR"} else None)
+
+
 def parse_operand(raw: str) -> tuple[str, float | int]:
-    raw = raw.strip()
+    raw, source = split_operand_source(raw)
     try:
         n = float(raw)
+    except ValueError:
+        n = None
+    if n is not None:
         if not math.isfinite(n):
             raise ConditionError("Constants must be finite")
+        if source is not None:
+            raise ConditionError("Fixed numbers do not have a market-data source")
         return "NUMBER", n
-    except ValueError:
-        if raw.lower() in {"nan", "inf", "-inf", "infinity"}:
-            raise ConditionError("Constants must be finite") from None
     match = re.fullmatch(r"(EMA|SMA|RSI|Supertrend)\s*(?:\(?([0-9]+)\)?)?", raw, re.I)
     if match:
         name = match[1].upper()
@@ -68,6 +91,46 @@ def validate_rules(rules: list[dict], exit_rules=False):
         normalize_operator(rule["operator"])
         if rule.get("connector", "AND") not in {"AND", "OR"}:
             raise ConditionError("Condition connector must be AND or OR")
+
+
+def uses_vix(strategy):
+    return any(operand_source(rule[key]) == "VIX"
+               for rule in strategy.get("entryRules", []) + strategy.get("exitRules", [])
+               for key in ("indicator", "value"))
+
+
+def _attach_reference(bars, reference_bars, source, field):
+    # Preserve full OHLCV history for source-indicator warmup. Only exact matching
+    # completed intervals are exposed at each traded-stock candle.
+    references = list(reference_bars)
+    lookup = {(b["time"], b["end"]): b for b in references}
+    return [{**b, field: (lookup.get((b["time"], b["end"])) or {}).get("close"),
+             "_reference_bars": {**b.get("_reference_bars", {}), source: references}}
+            for b in bars]
+
+
+def attach_vix(bars, vix_bars):
+    return _attach_reference(bars, vix_bars, "VIX", "vix")
+
+
+@indicator("VIX")
+def india_vix(bars, period):
+    return [b.get("vix") for b in bars]
+
+
+def uses_usdinr(strategy):
+    return any(operand_source(rule[key]) == "USDINR"
+               for rule in strategy.get("entryRules", []) + strategy.get("exitRules", [])
+               for key in ("indicator", "value"))
+
+
+def attach_usdinr(bars, reference_bars):
+    return _attach_reference(bars, reference_bars, "USDINR", "usdinr")
+
+
+@indicator("USDINR")
+def usdinr(bars, period):
+    return [b.get("usdinr") for b in bars]
 
 
 @indicator("Price")
@@ -182,6 +245,44 @@ def supertrend(bars, period):
     return out
 
 
+class ReferenceValues(list):
+    """Aligned indicator values plus source-window IDs for safe crossovers."""
+    def __init__(self, values, segments):
+        super().__init__(values)
+        self.segments = segments
+
+
+def _break_between(previous, current):
+    same_session = previous.get("session") == current.get("session")
+    return (same_session and "end" in previous and "time" in current and previous["end"] != current["time"]) or (
+        "segment" in previous and "segment" in current and previous["segment"] != current["segment"])
+
+
+def _reference_values(bars, source, name, period):
+    references = bars[-1].get("_reference_bars", {}).get(source, []) if bars else []
+    # A reference can have observations absent from the traded stock. Its RSI,
+    # moving averages and other indicators must retain those observations.
+    unique = {(b["time"], b["end"]): b for b in references}
+    ordered = [unique[key] for key in sorted(unique)]
+    groups = []
+    for bar in ordered:
+        if not groups or _break_between(groups[-1][-1], bar):
+            groups.append([])
+        groups[-1].append(bar)
+    by_interval = {}
+    calculator = REGISTRY["PRICE" if name in {"VIX", "USDINR"} else name]
+    for segment, group in enumerate(groups):
+        for candle, value in zip(group, calculator(group, int(period))):
+            by_interval[(candle["time"], candle["end"])] = (value, segment)
+    aligned = [by_interval.get((b.get("time"), b.get("end")), (None, None)) for b in bars]
+    return ReferenceValues([item[0] for item in aligned], [item[1] for item in aligned])
+
+
+def _can_cross(series, at):
+    return not isinstance(series, ReferenceValues) or (
+        series.segments[at] is not None and series.segments[at] == series.segments[at-1])
+
+
 @dataclass
 class Evaluation:
     matched: bool | None
@@ -197,7 +298,9 @@ def evaluate(rules: list[dict], bars: list[dict], *, index: int | None = None, c
         for raw in (rule["indicator"], rule["value"]):
             if raw not in cache:
                 name, period = parse_operand(raw)
-                cache[raw] = [period] * len(bars) if name == "NUMBER" else REGISTRY[name](bars, int(period))
+                source = operand_source(raw)
+                cache[raw] = (_reference_values(bars, source, name, period) if source else
+                              [period] * len(bars) if name == "NUMBER" else REGISTRY[name](bars, int(period)))
             values.append(cache[raw])
         left, right = values
         l, r = (left[at], right[at]) if at >= 0 else (None, None)
@@ -206,7 +309,8 @@ def evaluate(rules: list[dict], bars: list[dict], *, index: int | None = None, c
         result = None
         if l is not None and r is not None:
             if op in {"crosses above", "crosses below"}:
-                if pl is not None and pr is not None:
+                contiguous = at >= 1 and not _break_between(bars[at-1], bars[at])
+                if pl is not None and pr is not None and contiguous and _can_cross(left, at) and _can_cross(right, at):
                     result = pl <= pr and l > r if op == "crosses above" else pl >= pr and l < r
             elif op in {"greater than", "is above", ">"}:
                 result = l > r

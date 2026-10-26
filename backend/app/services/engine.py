@@ -18,13 +18,14 @@ from app.schemas import OrderIn, RiskIn, StrategyIn
 from app.services.broker import PaperBroker
 from app.services.candles import aggregate, timeframe_minutes, normalize, US_SYMBOLS, IST
 from zoneinfo import ZoneInfo
-from app.services.conditions import evaluate
+from app.services.conditions import evaluate, uses_vix, attach_vix, uses_usdinr, attach_usdinr
 from app.services.feed import (
     INDEX_SYMBOLS,
     PRICE_BOOK,
     STOCK_SYMBOLS,
     Feed,
     FeedTick,
+    Bar,
 )
 
 log = logging.getLogger("engine")
@@ -94,6 +95,7 @@ class TradingEngine:
     ):
         self.db = db
         self.feed = feed
+        self.option_market = None
         self.broker = broker
         if not broker.is_paper:
             raise EngineError("Only paper brokers are permitted", 403)
@@ -169,6 +171,7 @@ class TradingEngine:
         order = {
             "id": _uid("o"),
             "time": self.market_time.strftime("%H:%M:%S"),
+            "tradeDate": self.market_date,
             "symbol": symbol,
             "side": side,
             "type": typ,
@@ -224,7 +227,8 @@ class TradingEngine:
                 "trackingStartedAt": self.risk_runtime["trackingStartedAt"], "strategies": strategies}
 
     def _risk_reject_reason(self, symbol: str, qty: int, price: float, is_strategy: bool = False,
-                            strategy_id: str = "manual", sl_pct: float = 2.0) -> str | None:
+                            strategy_id: str = "manual", sl_pct: float = 2.0,
+                            capital_required: float | None = None) -> str | None:
         if symbol not in self.prices:
             return "Unknown symbol"
         if self.killed:
@@ -254,11 +258,13 @@ class TradingEngine:
 
         is_index = symbol in INDEX_SYMBOLS or "FUT" in symbol or "NIFTY" in symbol or "SENSEX" in symbol
         trade_cost = (price * qty * 0.1) if is_index else (price * qty)
+        if capital_required is not None:
+            trade_cost = capital_required
         max_trade_cap = float(self.risk.get("maxCapitalPerTrade", 5000000))
         if trade_cost > max_trade_cap:
             return "Exceeds max capital per trade"
         used = sum(
-            (p["avg"] * p["qty"] * (0.1 if (p["symbol"] in INDEX_SYMBOLS or "FUT" in p["symbol"]) else 1.0))
+            p.get("reservedCapital", p["avg"] * p["qty"] * (0.1 if (p["symbol"] in INDEX_SYMBOLS or "FUT" in p["symbol"]) else 1.0))
             for p in self.positions
         )
         total_cap = float(self.risk.get("totalCapital", 10000000))
@@ -341,7 +347,12 @@ class TradingEngine:
                 return
         raise EngineError("Open order not found", 404)
 
-    def _close_position(self, pos: dict, price: float, reason: str) -> None:
+    def _close_position(self, pos: dict, price: float, reason: str) -> bool:
+        if pos.get("executionAction") == "forward_put":
+            quote = self.option_market.quote(pos["symbol"], self.market_time) if self.option_market else None
+            if not quote or quote["askQuantity"] < pos["qty"]:
+                return False  # Never fabricate a protective fill from a stale premium or underlying.
+            price = quote["ask"]
         price = _r2(price)
         sign = 1 if pos["side"] == "BUY" else -1
         gross = (price - pos["avg"]) * sign * pos["qty"]
@@ -367,18 +378,20 @@ class TradingEngine:
         self.positions = [p for p in self.positions if p["id"] != pos["id"]]
         self.db.add_execution_log(pos["strategyId"], "exit", {"positionId": pos["id"], "trade": trade})
         log.info("Position %s exited: %s price=%s pnl=%s", pos["id"], reason, price, pnl)
+        return True
 
     def close_position(self, position_id: str, reason: str = "Manual exit") -> None:
         pos = next((p for p in self.positions if p["id"] == position_id), None)
         if not pos:
             raise EngineError("Position not found", 404)
-        self._close_position(pos, self.prices.get(pos["symbol"], pos["avg"]), reason)
+        if self._close_position(pos, self.prices.get(pos["symbol"], pos["avg"]), reason) is False:
+            raise EngineError("Waiting for a fresh option ask with enough quantity to close this paper position.", 409)
         self.save()
 
     def square_off_all(self, reason: str = "Square-off all") -> int:
-        n = len(self.positions)
+        n = 0
         for pos in list(self.positions):
-            self._close_position(pos, self.prices.get(pos["symbol"], pos["avg"]), reason)
+            n += bool(self._close_position(pos, self.prices.get(pos["symbol"], pos["avg"]), reason))
         if n:
             self.alert("warn", f"Squared off {n} position(s): {reason}")
         self.save()
@@ -415,7 +428,18 @@ class TradingEngine:
             raise EngineError("Strategy not found", 404)
         return s
 
+    def _pin_currency(self, data):
+        from app.services.currency_reference import pin_usdinr
+        from app.services.option_chain import ChainError
+        value = data.model_dump()
+        try:
+            pin_usdinr(value)
+        except ChainError as exc:
+            raise EngineError(str(exc), exc.status) from None
+        data.params = value['params']
+
     def create_strategy(self, data: StrategyIn) -> dict:
+        self._pin_currency(data)
         s = {**data.model_dump(), "id": _uid("s"), "stage": "Paper" if data.template == "Custom" else "Draft", "status": "running" if data.template == "Custom" else "stopped", "version": 1}
         self.strategies.append(s)
         self.runtime[s["id"]] = {"activatedAt": self.market_time.timestamp(), "symbols": {}}
@@ -432,6 +456,7 @@ class TradingEngine:
             raise EngineError("Close this strategy's positions before editing", 409)
         if data.template != s["template"]:
             raise EngineError("Template cannot be changed after creation", 400)
+        self._pin_currency(data)
         s.update(data.model_dump())
         s["version"] += 1
         self.orb.pop(sid, None)
@@ -537,7 +562,19 @@ class TradingEngine:
             return
 
         fresh = {}
-        for sym, bar in tick.bars.items():
+        observed = dict(tick.bars)
+        for pos in self.positions:
+            if pos.get("executionAction") != "forward_put":
+                continue
+            quote = self.option_market.quote(pos["symbol"], tick.market_time) if self.option_market else None
+            if quote:
+                # Quote snapshots have no intrabar extremes; monitor actual observed asks only.
+                price = quote["ask"]
+                observed[pos["symbol"]] = Bar(pos["symbol"], quote["timestamp"], price, price, price, price, 0)
+            elif pos.get("quoteStatus") != "stale":
+                self.db.add_execution_log(pos["strategyId"], "waiting", {"symbol": pos["symbol"], "message": "Option quote unavailable or stale; protective exits are waiting for a fresh ask."})
+            pos["quoteStatus"] = "fresh" if quote else "stale"
+        for sym, bar in observed.items():
             try:
                 normalize(bar)
             except (ValueError, TypeError):
@@ -662,7 +699,9 @@ class TradingEngine:
                     self._close_position(pos, self.prices[pos["symbol"]], "Strategy daily loss limit hit")
 
     @staticmethod
-    def _universe(instrument: str) -> list[str]:
+    def _universe(instrument: str, instruments: list[str] | None = None) -> list[str]:
+        if instruments:
+            return list(dict.fromkeys(symbol for selected in instruments for symbol in TradingEngine._universe(selected)))
         inst = (instrument or "NIFTY 50").strip()
         if inst in ("NIFTY", "NIFTY 50"):
             return ["NIFTY 50"]
@@ -712,8 +751,24 @@ class TradingEngine:
 
     def _run_custom(self, s: dict, tick: FeedTick) -> None:
         p = s["params"]
+        vix_bars = []
+        needs_vix = uses_vix(s)
+        if needs_vix:
+            if hasattr(self.feed, "candles"):
+                vix_bars = self.feed.candles("INDIA VIX", s["timeframe"], tick.market_time)
+            else:
+                vix_bars = aggregate(getattr(self.feed, "history", {}).get("INDIA VIX", []), s["timeframe"], tick.market_time, "INDIA VIX")
+        usd_bars = []
+        needs_usd = uses_usdinr(s)
+        if needs_usd:
+            from app.services.currency_reference import reference_key
+            key = reference_key(s)
+            if key and hasattr(self.feed, "candles"):
+                usd_bars = self.feed.candles(key, s["timeframe"], tick.market_time)
+            elif key:
+                usd_bars = aggregate(getattr(self.feed, "history", {}).get(key, []), s["timeframe"], tick.market_time, "NIFTY 50")
         runtime = self.runtime.setdefault(s["id"], {"activatedAt": tick.market_time.timestamp(), "symbols": {}})
-        for sym in self._universe(s["instrument"]):
+        for sym in self._universe(s["instrument"], s.get("instruments")):
             state = runtime["symbols"].setdefault(sym, {})
             bar = tick.bars.get(sym)
             if not bar and self.feed.kind == "real_market":
@@ -741,14 +796,18 @@ class TradingEngine:
             if end <= runtime["activatedAt"] or tick.market_time.timestamp() - end > 120:
                 state["message"] = "Waiting for a new candle after activation"
                 continue
+            if needs_vix:
+                candles = attach_vix(candles, vix_bars)
+            if needs_usd:
+                candles = attach_usdinr(candles, usd_bars)
             entry = evaluate(s["entryRules"], candles)
             previous = state.get("matched", False)
             if entry.matched is not None:
                 state["matched"] = entry.matched
             state["conditions"] = entry.conditions
-            state["message"] = "Insufficient history or volume" if entry.matched is None else ("Entry conditions satisfied" if entry.matched else "Waiting for entry conditions")
+            state["message"] = "Waiting for matching India VIX candles or indicator history" if needs_vix and entry.matched is None else "Waiting for matching USDINR futures candles or indicator history" if needs_usd and entry.matched is None else "Insufficient history or volume" if entry.matched is None else ("Entry conditions satisfied" if entry.matched else "Waiting for entry conditions")
             self._execution_event(s, "evaluation", {"symbol": sym, "candle": latest["time"], "matched": entry.matched, "conditions": entry.conditions})
-            position = next((x for x in self.positions if x["strategyId"] == s["id"] and x["symbol"] == sym), None)
+            position = next((x for x in self.positions if x["strategyId"] == s["id"] and x.get("underlying", x["symbol"]) == sym), None)
             if position:
                 exits = s.get("exitRules", [])
                 if exits:
@@ -762,6 +821,9 @@ class TradingEngine:
             if self._symbol_time(sym) >= p["squareOffTime"] or self._symbol_time(sym) >= self.risk["autoSquareOffTime"]:
                 continue
             self._execution_event(s, "signal", {"symbol": sym, "candle": latest["time"]})
+            if p.get("executionAction") == "forward_put":
+                self._enter_forward_put(s, sym, latest, state)
+                continue
             qty = int(p["quantity"])
             reason = self._risk_reject_reason(sym, qty, bar.close, is_strategy=True, strategy_id=s["id"], sl_pct=p["stopLossPercent"])
             if reason:
@@ -773,6 +835,52 @@ class TradingEngine:
             pos = self._open_position(sym, "BUY", qty, fill.price, s["id"], "Builder entry (Paper)", sl_pct=p["stopLossPercent"], target_pct=p["targetPercent"])
             self._execution_event(s, "entry", {"symbol": sym, "position": pos, "signalCandle": latest["time"]})
             self.alert("info", f"{s['name']}: BUY {qty} {sym} @ {fill.price:.2f} (Paper)")
+
+    def _enter_forward_put(self, strategy, underlying, candle, state):
+        if self.feed.kind != "real_market":
+            state["message"] = "Forward Put Builder requires FEED=real_market and fresh Kite quotes. Entry skipped."
+            self._execution_event(strategy, "waiting", {"symbol": underlying, "message": state["message"], "signalConsumed": True})
+            return
+        market = self.option_market
+        from app.services.forward_put import selection_key
+        months = strategy["params"].get("optionExpiryMonths")
+        selected = market.selection(underlying, self.market_time, months) if market else None
+        if not selected:
+            reason = (market.errors.get(selection_key(underlying, months)) or market.error) if market else "Forward Put Builder quote worker is unavailable"
+            state["message"] = reason
+            self._execution_event(strategy, "waiting", {"symbol": underlying, "message": reason, "action": "Forward Put Builder", "signalConsumed": True})
+            return
+        symbol = selected["symbol"]
+        quote = market.quote(symbol, self.market_time)
+        qty = int(strategy["params"]["optionLots"]) * selected["lotSize"]
+        if not quote or not quote.get("bid") or quote["bidQuantity"] < qty or quote["askQuantity"] < qty:
+            state["message"] = "Waiting for fresh bid/ask depth sufficient for the full option lot quantity. Entry skipped."
+            self._execution_event(strategy, "waiting", {"symbol": symbol, "message": state["message"], "signalConsumed": True})
+            return
+        price = quote["bid"]
+        # Cash-secured paper capital model; this is not an exchange margin estimate.
+        reserved = selected["strike"] * qty
+        self.prices[symbol] = quote["ask"]
+        params = strategy["params"]
+        reason = self._risk_reject_reason(symbol, qty, price, is_strategy=True,
+            strategy_id=strategy["id"], sl_pct=params["stopLossPercent"], capital_required=reserved)
+        if reason:
+            self._order(symbol, "SELL", "MARKET", qty, price, "REJECTED", strategy["id"], reason)
+            self._execution_event(strategy, "rejected", {"symbol": symbol, "reason": reason})
+            state["message"] = reason
+            return
+        fill = self.broker.execute_market(symbol, "SELL", qty, price)
+        position = self._open_position(symbol, "SELL", qty, fill.price, strategy["id"],
+            f"Forward Put Builder: sell 15th listed put above spot, expiry {selected['expiry']} (Paper)",
+            sl_pct=params["stopLossPercent"], target_pct=params["targetPercent"])
+        position.update(executionAction="forward_put", underlying=underlying, expiry=selected["expiry"],
+            strike=selected["strike"], lotSize=selected["lotSize"], lots=params["optionLots"],
+            exchange=selected["exchange"], instrumentToken=selected["instrumentToken"], reservedCapital=reserved,
+            expiryMonths=months)
+        state["message"] = f"Forward Put Builder: SELL {qty} {symbol} @ {fill.price:.2f} (Paper)"
+        self._execution_event(strategy, "entry", {"symbol": symbol, "underlying": underlying,
+            "position": position, "selection": selected, "signalCandle": candle["time"]})
+        self.alert("info", state["message"])
 
     def _run_orb(self, s: dict, tick: FeedTick) -> None:
         """Opening range breakout.
@@ -791,7 +899,7 @@ class TradingEngine:
         cutoff = p["squareOffTime"]
         state = self.orb.setdefault(s["id"], {})
 
-        for sym in self._universe(s["instrument"]):
+        for sym in self._universe(s["instrument"], s.get("instruments")):
             bar = tick.bars.get(sym)
             if not bar:
                 continue
@@ -802,7 +910,7 @@ class TradingEngine:
                 continue
             if d["high"] == -math.inf or _hhmm(tick.market_time) >= cutoff:
                 continue
-            if any(x["strategyId"] == s["id"] and x["symbol"] == sym for x in self.positions):
+            if any(x["strategyId"] == s["id"] and x.get("underlying", x["symbol"]) == sym for x in self.positions):
                 continue
             if d["low"] <= bar.close <= d["high"]:
                 d["armed"] = True
@@ -845,7 +953,7 @@ class TradingEngine:
         enhanced_strategies = []
         for s in self.strategies:
             strat_copy = dict(s)
-            sym = self._universe(strat_copy.get("instrument", "NIFTY 50"))[0]
+            sym = self._universe(strat_copy.get("instrument", "NIFTY 50"), strat_copy.get("instruments"))[0]
             clean_sym = sym.replace(" FUT", "").strip()
             ltp = self.prices.get(clean_sym) or self.prices.get(sym, 0.0)
             strat_copy["currentPrice"] = ltp

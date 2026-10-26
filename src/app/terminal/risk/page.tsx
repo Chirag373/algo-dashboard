@@ -2,11 +2,11 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
-import { Shield, BarChart2, AlertTriangle, TrendingUp, ShieldCheck, Save } from "lucide-react";
-import { useTerminal, type Result } from "@/lib/terminal/store";
+import { BarChart2, AlertTriangle, TrendingUp, ShieldCheck, Save } from "lucide-react";
+import { useTerminal, type Result } from "@/components/terminal/context";
 import type { RiskLimits, Strategy } from "@/types";
 import { Badge, Panel, Stat, Empty, btn, td, tdr, th, thr } from "@/components/terminal";
-import { inr, signed, pnlColor } from "@/lib/terminal/format";
+import { inr, signed, pnlColor } from "@/utils/format";
 import styles from "./risk.module.css";
 
 type Draft = {
@@ -29,7 +29,6 @@ function makeDraft(risk: RiskLimits, strategies: Strategy[]): Draft {
 export default function Risk() {
   const t = useTerminal();
   const status = t.riskStatus;
-  const exposure = t.positions.reduce((sum, p) => sum + Math.abs(p.ltp * p.qty), 0);
   const reason =
     t.connection !== "online"
       ? "Disconnected"
@@ -54,18 +53,6 @@ export default function Risk() {
         </p>
       </div>
       <div className={styles.stats}>
-        <Stat
-          label="Configured capital"
-          value={t.ready ? inr(t.risk.totalCapital) : "—"}
-          sub="Reference for percentage limits"
-          icon={<Shield className="w-5 h-5 text-blue-600" />}
-        />
-        <Stat
-          label="Current exposure"
-          value={t.ready ? inr(exposure) : "—"}
-          sub="Gross market value of open positions"
-          icon={<BarChart2 className="w-5 h-5 text-emerald-600" />}
-        />
         <Stat
           label="Today's P&L"
           value={t.ready ? signed(t.dayPnl, 2) : "—"}

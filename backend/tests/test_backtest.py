@@ -34,6 +34,17 @@ def run(rows, s=None, days=15, fee=0, slip=0, **kwargs):
     return run_saved_backtest(s or strategy(),days,100000,slip,fee,now=NOW,loader=load_rows(rows),**kwargs)
 
 class BacktestTests(unittest.TestCase):
+    def test_quantity_sizing_without_test_capital(self):
+        saved = strategy()
+        saved["params"]["quantity"] = 100000
+        result = run_saved_backtest(saved, 15, None, 0, 2, now=NOW,
+                                    loader=load_rows(flat("2026-10-15", 3, 101)))
+        self.assertEqual(result["trades"][0]["qty"], 100000)
+        self.assertEqual(result["trades"][0]["fees"], 4)
+        self.assertIsNone(result["summary"]["initialCapital"])
+        self.assertIsNone(result["summary"]["returnPct"])
+        self.assertFalse(any("insufficient" in w for w in result["warnings"]))
+
     def test_next_open_target_fee_and_equity(self):
         rows = bars("2026-10-15",[(101,101,101,101),(102,105,102,104),(104,104,104,104)])
         result = run(rows,fee=1)

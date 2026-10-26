@@ -8,6 +8,9 @@ Kite Connect Backtest Service
 from __future__ import annotations
 
 import datetime
+import os
+from pathlib import Path
+import threading
 import hashlib
 import json
 import math
@@ -19,16 +22,39 @@ from app.core.config import settings
 
 # ─────────────────────────── Kite token store (in-memory) ────────────────────
 _ACCESS_TOKEN: str = ""
+_TOKEN_LOCK = threading.RLock()
+_TOKEN_PATH = Path(settings.DB_PATH).parent / ".kite-session.json"
 
 
 def set_access_token(token: str) -> None:
     global _ACCESS_TOKEN
-    _ACCESS_TOKEN = token
-    settings.KITE_ACCESS_TOKEN = token
+    with _TOKEN_LOCK:
+        if token:
+            _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temporary = _TOKEN_PATH.with_suffix(".tmp")
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as output:
+                json.dump({"access_token": token, "api_key": settings.KITE_API_KEY}, output)
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, _TOKEN_PATH)
+        else:
+            _TOKEN_PATH.unlink(missing_ok=True)
+        _ACCESS_TOKEN = token
+        settings.KITE_ACCESS_TOKEN = token
 
 
 def get_access_token() -> str:
-    return _ACCESS_TOKEN or settings.KITE_ACCESS_TOKEN
+    global _ACCESS_TOKEN
+    with _TOKEN_LOCK:
+        if _ACCESS_TOKEN or settings.KITE_ACCESS_TOKEN:
+            return _ACCESS_TOKEN or settings.KITE_ACCESS_TOKEN
+        try:
+            saved = json.loads(_TOKEN_PATH.read_text())
+            if saved.get("api_key") == settings.KITE_API_KEY:
+                _ACCESS_TOKEN = saved.get("access_token", "")
+        except (OSError, ValueError):
+            pass
+        return _ACCESS_TOKEN
 
 
 # ─────────────────────────── Login helpers ────────────────────────────────────
@@ -60,6 +86,7 @@ def generate_session(request_token: str) -> dict:
 # ─────────────────────────── Instrument lookup ───────────────────────────────
 # Nifty 50 index Kite instrument token
 NIFTY_INSTRUMENTS = {
+    "INDIA VIX": {"token": 264969, "exchange": "NSE", "tradingsymbol": "INDIA VIX"},
     "NIFTY 50": {"token": 256265, "exchange": "NSE", "tradingsymbol": "NIFTY 50"},
     "NIFTY": {"token": 256265, "exchange": "NSE", "tradingsymbol": "NIFTY 50"},
     "NIFTY FUT": {"token": 256265, "exchange": "NSE", "tradingsymbol": "NIFTY 50"},
@@ -95,6 +122,7 @@ def fetch_exchange_candles(symbol: str, interval: str = "5m", days_back: int = 3
     Supports NIFTY 50, BANKNIFTY, SENSEX, and NSE stocks.
     """
     sym_map = {
+        "INDIA VIX": "^INDIAVIX",
         "NIFTY 50": "^NSEI",
         "NIFTY": "^NSEI",
         "NIFTY FUT": "^NSEI",
@@ -126,13 +154,20 @@ def fetch_exchange_candles(symbol: str, interval: str = "5m", days_back: int = 3
         range_str = f"{min(days_back, 7)}d"
     elif yf_interval in ["5m", "15m", "30m"]:
         range_str = f"{min(days_back, 59)}d"
+    elif yf_interval == "60m":
+        range_str = f"{min(days_back, 729)}d"
     else:
-        range_str = f"{min(days_back, 365)}d"
+        range_str = f"{days_back}d"
 
-    url = (
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(target)}"
-        f"?range={range_str}&interval={yf_interval}"
-    )
+    if yf_interval == "1d" and days_back >= 36525:
+        query = urllib.parse.urlencode({"range": "max", "interval": yf_interval})
+    elif yf_interval == "1d" and days_back > 365:
+        end = datetime.datetime.now(datetime.timezone.utc)
+        start = end - datetime.timedelta(days=days_back)
+        query = urllib.parse.urlencode({"period1": int(start.timestamp()), "period2": int(end.timestamp()), "interval": yf_interval})
+    else:
+        query = urllib.parse.urlencode({"range": range_str, "interval": yf_interval})
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(target)}?{query}"
 
     req = urllib.request.Request(
         url,

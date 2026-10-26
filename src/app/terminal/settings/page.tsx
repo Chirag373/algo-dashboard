@@ -1,14 +1,29 @@
 "use client";
 
-import { useState } from "react";
-import { useTerminal } from "@/context";
+import { useEffect, useState } from "react";
+import { useTerminal } from "@/components/terminal/context";
 import { Panel, Badge } from "@/components";
+import { api } from "@/utils/api";
 import { Key, CheckCircle2 } from "lucide-react";
 
 export default function SettingsPage() {
   const t = useTerminal();
   const [apiKey, setApiKey] = useState("ovioop7ol8h3p4tr");
   const [saved, setSaved] = useState(false);
+  const [connected, setConnected] = useState<boolean | null>(null);
+  useEffect(() => {
+    let active = true;
+    api<{ connected: boolean }>("GET", "/kite/status")
+      .then((status) => {
+        if (active) setConnected(status.connected);
+      })
+      .catch(() => {
+        if (active) setConnected(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,7 +53,9 @@ export default function SettingsPage() {
                 <div className="text-xs text-slate-500">Live Indian market data & execution</div>
               </div>
             </div>
-            <Badge tone="green">Active</Badge>
+            <Badge tone={connected ? "green" : "slate"}>
+              {connected === null ? "Unverified" : connected ? "Connected" : "Disconnected"}
+            </Badge>
           </div>
 
           <div className="space-y-3">

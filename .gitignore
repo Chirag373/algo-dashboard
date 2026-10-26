@@ -51,3 +51,9 @@ ENV/
 *.db-shm
 *.db-wal
 backend/data/*.db*
+
+# Local broker session (credentials)
+backend/data/.kite-session.*
+
+# Local dependency cache (generated, excluded from iCloud)
+/.dependencies.nosync/

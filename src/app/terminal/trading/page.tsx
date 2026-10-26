@@ -2,11 +2,11 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { BarChart3, Minus, Plus, Search, Star, Trash2, X } from "lucide-react";
-import { api } from "@/lib/terminal/api";
-import { useTerminal, pnlOf } from "@/lib/terminal/store";
-import { inr, num, pnlColor, signed } from "@/lib/terminal/format";
+import { api } from "@/utils/api";
+import { useTerminal, pnlOf } from "@/components/terminal/context";
+import { inr, num, pnlColor, signed } from "@/utils/format";
 import { Empty, Select } from "@/components/terminal";
-import type { Side } from "@/lib/terminal/types";
+import type { Side } from "@/types";
 import { LightweightChart } from "@/components/terminal";
 
 const card = "bg-white border border-slate-200 shadow-sm rounded-xl";
@@ -509,7 +509,7 @@ function OrderTicket({
 
 /* --------------------------------------------------------------------- Chart */
 
-const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "D"];
+const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1H", "4H", "D", "1M", "1Y", "5Y"];
 
 function ChartPanel({
   symbol,
@@ -522,7 +522,7 @@ function ChartPanel({
   quote: QuoteData;
   watchlist: string[];
 }) {
-  const [tf, setTf] = useState("5m");
+  const [tf, setTf] = useState("D");
 
   return (
     <section className={`${card} flex flex-col min-h-0`} style={{ flex: 2.5, minHeight: "400px" }}>
@@ -556,7 +556,7 @@ function ChartPanel({
         </div>
       </div>
 
-      <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50/50">
+      <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2 shrink-0 bg-slate-50/50">
         <div className="flex gap-1 bg-white border border-slate-200 rounded-md p-0.5 text-[11px] font-semibold">
           {TIMEFRAMES.map((k) => (
             <button
@@ -589,7 +589,10 @@ function ChartPanel({
           <span className="font-semibold text-slate-800">{symbol}</span> · {tf} · NSE Live Candles
         </div>
         <div className="flex-1 min-h-0">
-          <LightweightChart key={`${symbol}-${tf}`} symbol={symbol} height={undefined} />
+          <LightweightChart
+            symbol={symbol}
+            timeframe={tf === "D" ? "1d" : ["1M", "1Y", "5Y"].includes(tf) ? tf : tf.toLowerCase()}
+          />
         </div>
       </div>
     </section>

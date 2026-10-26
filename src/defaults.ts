@@ -1,8 +1,9 @@
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001/api/v1";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000/api/v1";
 
 export const WS_BASE_URL =
-  process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8001/ws/terminal";
+  process.env.NEXT_PUBLIC_TERMINAL_WS_URL ??
+  process.env.NEXT_PUBLIC_WS_URL ??
+  `${API_BASE_URL.replace(/^http/, "ws").replace(/\/api\/v1\/?$/, "")}/ws/terminal`;
 
 export const DEFAULT_SYMBOLS = [
   "NIFTY 50",
@@ -46,6 +47,8 @@ export const INDICATOR_TYPES = [
   { value: "Price", label: "Price (Close)", hasPeriod: false },
   { value: "Opening Range High", label: "Opening Range High", hasPeriod: false },
   { value: "Opening Range Low", label: "Opening Range Low", hasPeriod: false },
+  { value: "USDINR", label: "USD/INR (Futures)", hasPeriod: false },
+  { value: "VIX", label: "VIX (India VIX)", hasPeriod: false },
   { value: "VWAP", label: "VWAP", hasPeriod: false },
   { value: "Supertrend", label: "Supertrend", hasPeriod: false },
   { value: "Number", label: "Fixed Number / Value", hasPeriod: false, isNumber: true },

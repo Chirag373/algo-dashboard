@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api } from "@/lib/terminal/api";
+import { api } from "@/utils/api";
 
 interface Event {
   id: number;

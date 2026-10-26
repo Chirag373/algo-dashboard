@@ -1,198 +1,17 @@
 "use client";
 
+import { MultiSelect } from "@/components/terminal/ui";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Plus, X, ArrowLeft } from "lucide-react";
-import { useTerminal } from "@/lib/terminal/store";
+import { ArrowLeft } from "lucide-react";
+import { useTerminal } from "@/components/terminal/context";
 import { Empty, Panel, Select, inputCls } from "@/components/terminal";
-import { api } from "@/lib/terminal/api";
-import { INDICATOR_TYPES, OPERATORS_LIST, STANDARD_TIMEFRAMES } from "@/config/defaults";
-import type { ParamValue, Rule, Strategy } from "@/lib/terminal/types";
-
-// Helper to parse indicator string into { type, period }
-function parseIndicatorField(raw: string) {
-  if (!raw) return { type: "EMA", period: 9 };
-  const str = raw.trim();
-  const match = str.match(/^(EMA|SMA|RSI)\s*\(?(\d+)?\)?$/i);
-  if (match) {
-    return {
-      type: match[1].toUpperCase(),
-      period: match[2]
-        ? Number(match[2])
-        : match[1].toUpperCase() === "EMA"
-          ? 9
-          : match[1].toUpperCase() === "RSI"
-            ? 14
-            : 20,
-    };
-  }
-  // Check if it's purely a number
-  if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(str)) {
-    return { type: "Number", period: Number(str) };
-  }
-  // Standard indicator without period
-  const found = INDICATOR_TYPES.find((i) => i.value.toLowerCase() === str.toLowerCase());
-  if (found) {
-    return { type: found.value, period: found.defaultPeriod || 0 };
-  }
-  return { type: str, period: 9 };
-}
-
-function formatIndicatorString(type: string, period?: number | string) {
-  if (type === "Number") return String(period ?? 0);
-  if (["EMA", "SMA", "RSI"].includes(type)) {
-    return `${type} ${period ?? (type === "EMA" ? 9 : type === "RSI" ? 14 : 20)}`;
-  }
-  return type;
-}
-
-function emptyRule(): Rule {
-  return { indicator: "EMA 9", operator: "crosses above", value: "EMA 21" };
-}
-
-function RuleBuilder({ rules, onChange }: { rules: Rule[]; onChange: (r: Rule[]) => void }) {
-  return (
-    <div className="space-y-4">
-      {rules.length === 0 ? (
-        <Empty text="No conditions. Add at least one condition." />
-      ) : (
-        <div className="space-y-3">
-          {rules.map((r, i) => {
-            const leftParsed = parseIndicatorField(r.indicator);
-            const rightParsed = parseIndicatorField(r.value);
-
-            return (
-              <div
-                key={i}
-                className="flex flex-wrap items-center gap-2.5 bg-slate-50 p-3.5 rounded-xl border border-slate-200 shadow-sm"
-              >
-                {i === 0 ? (
-                  <span className="text-xs font-bold text-slate-500 w-9 text-center">IF</span>
-                ) : (
-                  <Select
-                    className="w-20"
-                    value={r.connector ?? "AND"}
-                    onChange={(connector) =>
-                      onChange(
-                        rules.map((x, j) =>
-                          j === i ? { ...x, connector: connector as "AND" | "OR" } : x
-                        )
-                      )
-                    }
-                    options={[
-                      { value: "AND", label: "AND" },
-                      { value: "OR", label: "OR" },
-                    ]}
-                  />
-                )}
-
-                {/* Left Side: Indicator Selection */}
-                <div className="flex items-center gap-1.5">
-                  <Select
-                    className="w-[140px]"
-                    value={leftParsed.type}
-                    onChange={(val) => {
-                      const def =
-                        INDICATOR_TYPES.find((t) => t.value === val)?.defaultPeriod ??
-                        leftParsed.period;
-                      const newInd = formatIndicatorString(val, def);
-                      onChange(rules.map((x, j) => (j === i ? { ...x, indicator: newInd } : x)));
-                    }}
-                    options={INDICATOR_TYPES.map((o) => ({ value: o.value, label: o.label }))}
-                  />
-
-                  {/* Left Side: Number/Period Input beside indicator if applicable */}
-                  {["EMA", "SMA", "RSI", "Number"].includes(leftParsed.type) && (
-                    <div className="relative w-16">
-                      <input
-                        type="number"
-                        min={leftParsed.type === "Number" ? undefined : 1}
-                        step={leftParsed.type === "Number" ? "any" : 1}
-                        className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs text-slate-800 font-bold focus:outline-none focus:border-blue-500 text-center shadow-sm"
-                        placeholder={leftParsed.type === "EMA" ? "9" : "20"}
-                        value={leftParsed.period}
-                        onChange={(e) => {
-                          const num = Number(e.target.value);
-                          const newInd = formatIndicatorString(leftParsed.type, num);
-                          onChange(
-                            rules.map((x, j) => (j === i ? { ...x, indicator: newInd } : x))
-                          );
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-
-                {/* Operator Selection */}
-                <Select
-                  className="w-[145px]"
-                  value={r.operator}
-                  onChange={(val) =>
-                    onChange(rules.map((x, j) => (j === i ? { ...x, operator: val } : x)))
-                  }
-                  options={OPERATORS_LIST.map((o) => ({ value: o, label: o }))}
-                />
-
-                {/* Right Side: Indicator Selection */}
-                <div className="flex items-center gap-1.5">
-                  <Select
-                    className="w-[140px]"
-                    value={rightParsed.type}
-                    onChange={(val) => {
-                      const def =
-                        INDICATOR_TYPES.find((t) => t.value === val)?.defaultPeriod ??
-                        (val === "EMA" ? 21 : 20);
-                      const newVal = formatIndicatorString(val, def);
-                      onChange(rules.map((x, j) => (j === i ? { ...x, value: newVal } : x)));
-                    }}
-                    options={INDICATOR_TYPES.map((o) => ({ value: o.value, label: o.label }))}
-                  />
-
-                  {/* Right Side: Number/Period Input beside indicator if applicable */}
-                  {["EMA", "SMA", "RSI", "Number"].includes(rightParsed.type) && (
-                    <div className="relative w-16">
-                      <input
-                        type="number"
-                        min={rightParsed.type === "Number" ? undefined : 1}
-                        step={rightParsed.type === "Number" ? "any" : 1}
-                        className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs text-slate-800 font-bold focus:outline-none focus:border-blue-500 text-center shadow-sm"
-                        placeholder={rightParsed.type === "EMA" ? "21" : "20"}
-                        value={rightParsed.period}
-                        onChange={(e) => {
-                          const num = Number(e.target.value);
-                          const newVal = formatIndicatorString(rightParsed.type, num);
-                          onChange(rules.map((x, j) => (j === i ? { ...x, value: newVal } : x)));
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-
-                {/* Remove Condition Button */}
-                <button
-                  onClick={() => onChange(rules.filter((_, j) => j !== i))}
-                  className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg ml-auto transition-colors"
-                  title="Remove condition"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <button
-        type="button"
-        onClick={() => onChange([...rules, emptyRule()])}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
-      >
-        <Plus className="w-3.5 h-3.5" /> Add Condition
-      </button>
-    </div>
-  );
-}
+import { api } from "@/utils/api";
+import { STANDARD_TIMEFRAMES } from "@/defaults";
+import { RuleBuilder } from "@/components/terminal/RuleBuilder";
+import { emptyRule, parseIndicatorField } from "@/utils/rules";
+import type { ParamValue, Strategy } from "@/types";
 
 export default function StrategyEditor() {
   const { id } = useParams<{ id: string }>();
@@ -207,7 +26,7 @@ export default function StrategyEditor() {
         id: `s-${Date.now()}`,
         name: "",
         template: "Custom",
-        instrument: "NIFTY",
+        instrument: "TCS",
         timeframe: "5m",
         stage: "Draft",
         status: "stopped",
@@ -225,12 +44,13 @@ export default function StrategyEditor() {
         exitRules: [],
       }
   );
+  const forwardPut = form.params.executionAction === "forward_put";
   const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
-  // Alpaca assets state
-  const [alpacaAssets, setAlpacaAssets] = useState<
+  // Indian assets state
+  const [indianAssets, setIndianAssets] = useState<
     { symbol: string; name: string; exchange?: string }[]
   >([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -248,7 +68,7 @@ export default function StrategyEditor() {
   const isCustomTimeframe =
     customSelected || !["1m", "5m", "15m", "30m", "1h", "4h"].includes(form.timeframe);
 
-  // Load Alpaca assets on mount
+  // Load Indian assets on mount
   useEffect(() => {
     let active = true;
     async function loadAssets() {
@@ -256,11 +76,13 @@ export default function StrategyEditor() {
       try {
         const data = await api<{ assets: { symbol: string; name: string; exchange?: string }[] }>(
           "GET",
-          "/assets?limit=250"
+          "/assets?limit=30000"
         );
-        if (active) setAlpacaAssets(data.assets);
-      } catch {
-        // Fallback default
+        if (active) setIndianAssets(data.assets);
+      } catch (error) {
+        if (active)
+          setServerError(error instanceof Error ? error.message : "Unable to load Indian stocks");
+        // Keep built-in Indian choices available
       } finally {
         if (active) setLoadingAssets(false);
       }
@@ -271,99 +93,72 @@ export default function StrategyEditor() {
     };
   }, []);
 
-  const filteredAssets = alpacaAssets;
-
-  const instrumentOptions = useMemo(() => {
-    const indianIndices = [
-      { value: "NIFTY 50", label: "NIFTY 50 (Index)" },
-      { value: "BANKNIFTY", label: "BANKNIFTY (Nifty Bank Index)" },
-      { value: "FINNIFTY", label: "FINNIFTY (Financial Services)" },
-      { value: "SENSEX", label: "SENSEX (BSE Index)" },
-      { value: "NIFTY 50 Stocks", label: "NIFTY 50 Stocks (Basket)" },
-    ];
-
-    const topIndianEquities = [
-      { value: "RELIANCE", label: "RELIANCE • Reliance Industries" },
-      { value: "TCS", label: "TCS • Tata Consultancy Services" },
-      { value: "HDFCBANK", label: "HDFCBANK • HDFC Bank" },
-      { value: "INFY", label: "INFY • Infosys" },
-      { value: "ICICIBANK", label: "ICICIBANK • ICICI Bank" },
-      { value: "SBIN", label: "SBIN • State Bank of India" },
-      { value: "BHARTIARTL", label: "BHARTIARTL • Bharti Airtel" },
-      { value: "ITC", label: "ITC • ITC Ltd" },
-      { value: "KOTAKBANK", label: "KOTAKBANK • Kotak Mahindra Bank" },
-      { value: "LT", label: "LT • Larsen & Toubro" },
-      { value: "AXISBANK", label: "AXISBANK • Axis Bank" },
-      { value: "TATAMOTORS", label: "TATAMOTORS • Tata Motors" },
-      { value: "MARUTI", label: "MARUTI • Maruti Suzuki" },
-      { value: "SUNPHARMA", label: "SUNPHARMA • Sun Pharma" },
-      { value: "BAJFINANCE", label: "BAJFINANCE • Bajaj Finance" },
-      { value: "TITAN", label: "TITAN • Titan Company" },
-      { value: "WIPRO", label: "WIPRO • Wipro Ltd" },
-      { value: "TATASTEEL", label: "TATASTEEL • Tata Steel" },
-      { value: "POWERGRID", label: "POWERGRID • Power Grid Corp" },
-      { value: "NTPC", label: "NTPC • NTPC Ltd" },
-      { value: "ULTRACEMCO", label: "ULTRACEMCO • UltraTech Cement" },
-      { value: "ADANIENT", label: "ADANIENT • Adani Enterprises" },
-      { value: "ADANIPORTS", label: "ADANIPORTS • Adani Ports" },
-      { value: "ASIANPAINT", label: "ASIANPAINT • Asian Paints" },
-      { value: "HCLTECH", label: "HCLTECH • HCL Technologies" },
-      { value: "BAJAJFINSV", label: "BAJAJFINSV • Bajaj Finserv" },
-      { value: "NESTLEIND", label: "NESTLEIND • Nestle India" },
-      { value: "COALINDIA", label: "COALINDIA • Coal India" },
-      { value: "ONGC", label: "ONGC • Oil & Natural Gas" },
-      { value: "JSWSTEEL", label: "JSWSTEEL • JSW Steel" },
-      { value: "TRENT", label: "TRENT • Trent Ltd" },
-      { value: "BEL", label: "BEL • Bharat Electronics" },
-      { value: "HAL", label: "HAL • Hindustan Aeronautics" },
-      { value: "M&M", label: "M&M • Mahindra & Mahindra" },
-      { value: "TECHM", label: "TECHM • Tech Mahindra" },
-      { value: "EICHERMOT", label: "EICHERMOT • Eicher Motors" },
-      { value: "CIPLA", label: "CIPLA • Cipla Ltd" },
-      { value: "DRREDDY", label: "DRREDDY • Dr. Reddy's Lab" },
-    ];
-
-    const globalAssets = [
-      { value: "SPY", label: "SPY (S&P 500 ETF)" },
-      { value: "QQQ", label: "QQQ (Nasdaq 100 ETF)" },
-      { value: "AAPL", label: "AAPL (Apple Inc.)" },
-      { value: "MSFT", label: "MSFT (Microsoft)" },
-      { value: "NVDA", label: "NVDA (NVIDIA)" },
-      { value: "TSLA", label: "TSLA (Tesla)" },
-      { value: "AMZN", label: "AMZN (Amazon)" },
-      { value: "GOOGL", label: "GOOGL (Alphabet)" },
-      { value: "META", label: "META (Meta Platforms)" },
-    ];
-
-    const primaryValues = new Set([
-      ...indianIndices.map((i) => i.value),
-      ...topIndianEquities.map((i) => i.value),
-      ...globalAssets.map((i) => i.value),
-    ]);
-
-    const dynamicOpts = filteredAssets
-      .filter((a) => !primaryValues.has(a.symbol))
-      .map((a) => ({
-        value: a.symbol,
-        label: `${a.symbol} • ${a.name}`,
-      }));
-
-    return [...indianIndices, ...topIndianEquities, ...globalAssets, ...dynamicOpts];
-  }, [filteredAssets]);
+  const instrumentOptions = useMemo(
+    () =>
+      indianAssets.map((stock) => ({
+        value: stock.symbol,
+        label: `${stock.symbol} • ${stock.name} (${stock.exchange})`,
+      })),
+    [indianAssets]
+  );
 
   const errors = useMemo(() => {
     const e: string[] = [];
+    if (!(form.instruments ?? [form.instrument]).length || !form.instrument)
+      e.push("Select at least one stock or index");
     if (!form.name.trim()) e.push("Name is required");
     if (form.entryRules && form.entryRules.length === 0)
       e.push("At least one entry condition is required");
     if (!Number.isInteger(Number(form.params.quantity)) || Number(form.params.quantity) <= 0)
       e.push("Quantity must be a positive integer");
+    if (
+      forwardPut &&
+      (!Number.isInteger(Number(form.params.optionLots ?? 1)) ||
+        Number(form.params.optionLots ?? 1) < 1 ||
+        Number(form.params.optionLots ?? 1) > 1000)
+    )
+      e.push("Option lots must be a whole number from 1 to 1000");
     if (Number(form.params.stopLossPercent ?? form.params.stopLoss) <= 0)
       e.push("Stop loss must be positive");
     if (Number(form.params.targetPercent ?? form.params.targetProfit) <= 0)
       e.push("Target profit must be positive");
+    for (const rule of [...(form.entryRules ?? []), ...(form.exitRules ?? [])]) {
+      const left = parseIndicatorField(rule.indicator);
+      const right = parseIndicatorField(rule.value);
+      if (
+        left.type === "RSI" &&
+        (right.type !== "Number" ||
+          !rule.value.trim() ||
+          !Number.isFinite(Number(rule.value)) ||
+          Number(rule.value) < 0 ||
+          Number(rule.value) > 100)
+      ) {
+        e.push("Enter an RSI level between 0 and 100.");
+      }
+      if (
+        left.source !== "stock" &&
+        left.type === "Price" &&
+        (right.type !== "Number" ||
+          !rule.value.trim() ||
+          !Number.isFinite(Number(rule.value)) ||
+          Number(rule.value) < 0)
+      )
+        e.push(
+          left.source === "USDINR"
+            ? "Enter a non-negative USD/INR level."
+            : "Enter a non-negative India VIX level."
+        );
+      for (const operand of [left, right]) {
+        if (
+          ["EMA", "SMA", "RSI"].includes(operand.type) &&
+          (!Number.isInteger(operand.period) || operand.period < 1 || operand.period > 500)
+        ) {
+          e.push("Indicator periods must be whole numbers from 1 to 500 candles.");
+        }
+      }
+    }
     return e;
-  }, [form]);
+  }, [form, forwardPut]);
 
   if (!existing && !isNew) {
     return (
@@ -420,6 +215,7 @@ export default function StrategyEditor() {
         params: {
           ...form.params,
           quantity: Number(form.params.quantity ?? 100),
+          ...(forwardPut ? { optionLots: Number(form.params.optionLots ?? 1) } : {}),
           stopLossPercent: Number(form.params.stopLossPercent ?? form.params.stopLoss ?? 1),
           targetPercent: Number(form.params.targetPercent ?? form.params.targetProfit ?? 2),
           perTradeAmount: Math.max(100, Number(form.params.quantity || 100) * 100),
@@ -492,39 +288,26 @@ export default function StrategyEditor() {
               )}
             </div>
             <p className="text-xs text-slate-500 ml-7 mt-1.5 mb-4">
-              Select NIFTY 50, Bank Nifty, Indian Equities (NSE), or Global Stocks
+              Select Indian company stocks. Search by symbol or company name.
             </p>
             <div className="ml-7 space-y-3">
-              <Select
-                searchable
-                value={form.instrument}
-                onChange={(val) => {
-                  const us =
-                    [
-                      "SPY",
-                      "QQQ",
-                      "AAPL",
-                      "MSFT",
-                      "NVDA",
-                      "TSLA",
-                      "AMZN",
-                      "GOOGL",
-                      "META",
-                    ].includes(val) ||
-                    alpacaAssets.some(
-                      (a) => a.symbol === val && !["NSE", "BSE"].includes(a.exchange ?? "")
-                    );
+              <MultiSelect
+                values={form.instruments ?? [form.instrument]}
+                onChange={(instruments) =>
                   setForm({
                     ...form,
-                    instrument: val,
-                    params: { ...form.params, market: us ? "US" : "IN" },
-                  });
-                }}
+                    instruments,
+                    instrument: instruments[0] ?? "",
+                    params: { ...form.params, market: "IN" },
+                  })
+                }
                 options={instrumentOptions}
               />
-              <div className="text-[11px] text-slate-400 pt-1">
-                Selected: <strong className="text-slate-700">{form.instrument}</strong>
-              </div>
+              <p className="text-xs text-slate-400">
+                {forwardPut
+                  ? "Entry indicators use each selected underlying. Option lots apply to each underlying separately."
+                  : "Saved quantity applies to each selected stock."}
+              </p>
             </div>
           </div>
 
@@ -583,7 +366,88 @@ export default function StrategyEditor() {
             Conditions use completed candles. AND is evaluated before OR. Opening range uses the
             first candle of the selected timeframe; Supertrend uses ATR 10 × 3.
           </p>
-          <div className="ml-7">
+          <div className="ml-7 space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="grid gap-1.5 text-sm font-medium text-slate-700">
+                  Trade action when entry conditions match
+                  <Select
+                    aria-label="Strategy trade action"
+                    value={String(form.params.executionAction ?? "buy_underlying")}
+                    onChange={(value) =>
+                      setForm((current) => ({
+                        ...current,
+                        name:
+                          current.name || (value === "forward_put" ? "Forward Put Builder" : ""),
+                        params: {
+                          ...current.params,
+                          executionAction: value,
+                          optionLots: current.params.optionLots ?? 1,
+                          ...(value === "forward_put"
+                            ? { optionExpiryMonths: current.params.optionExpiryMonths ?? 2 }
+                            : {}),
+                        },
+                      }))
+                    }
+                    options={[
+                      { value: "buy_underlying", label: "Buy selected stock / index" },
+                      { value: "forward_put", label: "Forward Put Builder" },
+                    ]}
+                  />
+                </label>
+                {forwardPut && (
+                  <label className="grid gap-1.5 text-sm font-medium text-slate-700">
+                    How far forward?
+                    <Select
+                      aria-label="Forward put expiry month"
+                      value={String(form.params.optionExpiryMonths ?? "legacy")}
+                      onChange={(value) => {
+                        if (value !== "legacy") setParam("optionExpiryMonths", Number(value));
+                      }}
+                      options={[
+                        ...(form.params.optionExpiryMonths == null
+                          ? [{ value: "legacy", label: "60–90 days (saved rule)" }]
+                          : []),
+                        { value: "0", label: "This month" },
+                        { value: "1", label: "Next month" },
+                        { value: "2", label: "2 months forward" },
+                      ]}
+                    />
+                  </label>
+                )}
+              </div>
+              {forwardPut && (
+                <div className="space-y-2 text-sm text-slate-600">
+                  <p>
+                    Sell a put in Paper Trading at the{" "}
+                    <strong>15th listed strike strictly above the current underlying price</strong>,
+                    using the earliest active expiry{" "}
+                    {form.params.optionExpiryMonths == null ? (
+                      <strong>60–90 calendar days away</strong>
+                    ) : (
+                      <strong>
+                        {Number(form.params.optionExpiryMonths) === 0
+                          ? "in this calendar month"
+                          : Number(form.params.optionExpiryMonths) === 1
+                            ? "in the next calendar month"
+                            : "in the calendar month 2 months ahead"}
+                      </strong>
+                    )}
+                    .
+                  </p>
+                  <p className="text-xs">
+                    Requires Kite quotes. If the expiry, 15th strike, or sufficient fresh bid/ask
+                    depth is unavailable, that signal is skipped and logged. Conditions must reset
+                    before another entry.
+                  </p>
+                  <p className="text-xs">
+                    Quantity is in whole lots. Stop loss and target use the option premium; the
+                    saved daily square-off time still applies. Paper capital reserves strike ×
+                    quantity; historical backtesting for this action is unavailable.
+                  </p>
+                </div>
+              )}
+            </div>
             <RuleBuilder
               rules={form.entryRules ?? []}
               onChange={(rules) => setForm({ ...form, entryRules: rules })}
@@ -620,12 +484,20 @@ export default function StrategyEditor() {
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-[13px] font-medium text-slate-700">Quantity</label>
+              <label className="text-[13px] font-medium text-slate-700">
+                {forwardPut ? "Option lots per underlying" : "Quantity"}
+              </label>
               <input
                 type="number"
                 className={inputCls}
-                value={form.params.quantity as number}
-                onChange={(e) => setParam("quantity", Number(e.target.value))}
+                aria-label={forwardPut ? "Option lots per underlying" : "Strategy quantity"}
+                min={1}
+                max={forwardPut ? 1000 : 1000000}
+                step={1}
+                value={Number(forwardPut ? (form.params.optionLots ?? 1) : form.params.quantity)}
+                onChange={(e) =>
+                  setParam(forwardPut ? "optionLots" : "quantity", Number(e.target.value))
+                }
               />
             </div>
           </div>
@@ -636,6 +508,7 @@ export default function StrategyEditor() {
             Stop loss and target always protect open positions, including while paused or stopped.
           </p>
           <RuleBuilder
+            purpose="exit"
             rules={form.exitRules ?? []}
             onChange={(rules) => setForm({ ...form, exitRules: rules })}
           />

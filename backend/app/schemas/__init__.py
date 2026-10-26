@@ -60,6 +60,7 @@ class StrategyIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     template: Template = "Custom"
     instrument: str
+    instruments: list[str] = Field(default_factory=list, max_length=100)
     timeframe: str
     params: dict[str, Any]
     entryRules: list[Rule] = []
@@ -93,6 +94,13 @@ class StrategyIn(BaseModel):
 
     @model_validator(mode="after")
     def check_params(self) -> "StrategyIn":
+        self.instruments = list(dict.fromkeys(self.check_instrument(value) for value in self.instruments))
+        if len(self.instruments) == 1:
+            self.instruments = [self.instrument]
+        elif self.instruments:
+            self.instrument = self.instruments[0]
+        else:
+            self.instruments = [self.instrument]
         rules = PARAM_RULES.get(self.template, PARAM_RULES["Custom"])
         clean: dict[str, Any] = {}
 
@@ -150,6 +158,20 @@ class StrategyIn(BaseModel):
                 clean[k] = v
 
         self.params = clean
+        action = self.params.get("executionAction", "buy_underlying")
+        if not isinstance(action, str) or action not in {"buy_underlying", "forward_put"}:
+            raise ValueError("Unknown execution action")
+        if action == "forward_put":
+            if self.template != "Custom" or self.params.get("market", "IN") != "IN":
+                raise ValueError("Forward Put Builder requires a Custom Indian-market strategy")
+            if "optionExpiryMonths" in self.params:
+                months = self.params["optionExpiryMonths"]
+                if type(months) is not int or months not in (0, 1, 2):
+                    raise ValueError("Expiry month must be 0 (this month), 1 (next month), or 2 (2 months forward)")
+            lots = self.params.get("optionLots", 1)
+            if isinstance(lots, bool) or not isinstance(lots, (int, float)) or not math.isfinite(lots) or int(lots) != lots or not 1 <= lots <= 1000:
+                raise ValueError("Option lots must be an integer from 1 to 1000")
+            self.params.update(executionAction=action, optionLots=int(lots))
         if self.template == "Custom":
             quantity = self.params.get("quantity", 100)
             try:

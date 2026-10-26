@@ -1,10 +1,12 @@
 "use client";
 
+import { Select } from "@/components/terminal/ui";
 import { useState } from "react";
 import { Search, FileText } from "lucide-react";
 import { TradeLogsModal } from "@/components/TradeLogsModal";
 
 export default function TradeHistory() {
+  const [tradeType, setTradeType] = useState("All Types");
   const [selectedTrade, setSelectedTrade] = useState<string | null>(null);
 
   return (
@@ -24,11 +26,13 @@ export default function TradeHistory() {
           placeholder="Symbol..."
           className="bg-white text-black px-3 py-2 rounded border border-gray-300 outline-none focus:ring-2 focus:ring-blue-500"
         />
-        <select className="bg-white text-black px-3 py-2 rounded border border-gray-300 outline-none focus:ring-2 focus:ring-blue-500">
-          <option>All Types</option>
-          <option>LONG</option>
-          <option>SHORT</option>
-        </select>
+        <Select
+          aria-label="Trade type"
+          value={tradeType}
+          onChange={setTradeType}
+          className="min-w-36"
+          options={["All Types", "LONG", "SHORT"].map((value) => ({ value, label: value }))}
+        />
         <button className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded flex items-center gap-2 transition-colors font-medium">
           <Search className="w-4 h-4" />
           Search

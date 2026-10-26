@@ -9,8 +9,8 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { api, ApiError, WS_URL } from "./api";
-import { PRICE_BOOK } from "./mock";
+import { api, ApiError, WS_URL } from "@/utils/api";
+import { PRICE_BOOK } from "@/utils/mock";
 import type {
   Alert,
   ClosedTrade,
@@ -22,7 +22,7 @@ import type {
   Strategy,
   StrategyStats,
   RiskStatus,
-} from "./types";
+} from "@/types";
 
 interface OrderRequest {
   symbol: string;
@@ -302,6 +302,7 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
         name: s.name,
         template: s.template || "Custom",
         instrument: s.instrument,
+        instruments: s.instruments ?? [],
         timeframe: s.timeframe,
         params: s.params,
         entryRules: s.entryRules ?? [],

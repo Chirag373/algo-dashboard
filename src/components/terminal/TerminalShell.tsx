@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Activity,
+  Layers,
+  History,
   BarChart3,
   FlaskConical,
   LayoutDashboard,
@@ -15,12 +17,14 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { TerminalProvider, useTerminal } from "@/lib/terminal/store";
+import { TerminalProvider, useTerminal } from "@/components/terminal/context";
 
 const NAV = [
   { href: "/terminal", label: "Dashboard", icon: LayoutDashboard },
   { href: "/terminal/trading", label: "Trading", icon: Activity },
+  { href: "/terminal/option-chain", label: "Option Chain", icon: Layers },
   { href: "/terminal/strategies", label: "Strategies", icon: ListChecks },
+  { href: "/terminal/history", label: "History", icon: History },
   { href: "/terminal/backtest", label: "Backtest", icon: FlaskConical },
   { href: "/terminal/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/terminal/risk", label: "Risk", icon: ShieldAlert },

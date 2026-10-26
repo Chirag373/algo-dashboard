@@ -174,8 +174,18 @@ class RealMarketFeed:
                 continue
             tf = timeframe_minutes(s["timeframe"])
             base = self._base(tf)
+            from app.services.conditions import uses_vix, uses_usdinr
+            from app.services.currency_reference import reference_key
+            if uses_usdinr(s):
+                key = reference_key(s)
+                if key:
+                    self.symbols.add(key)
+                    self.requests.add((key, "1m"))
+            if uses_vix(s):
+                self.symbols.add("INDIA VIX")
+                self.requests.update({("INDIA VIX", "1m"), ("INDIA VIX", base)})
             from app.services.engine import TradingEngine
-            for symbol in TradingEngine._universe(s["instrument"]):
+            for symbol in TradingEngine._universe(s["instrument"], s.get("instruments")):
                 if s.get("params", {}).get("market") == "US":
                     US_SYMBOLS.add(symbol)
                 self.requests.add((symbol, base))
@@ -186,19 +196,25 @@ class RealMarketFeed:
         return next((tf for tf, n in [("1h", 60), ("30m", 30), ("15m", 15), ("5m", 5)] if minutes % n == 0), "1m")
 
     def candles(self, symbol, timeframe, now):
-        base = self._base(timeframe_minutes(timeframe))
+        base = "1m" if symbol.startswith("CDS:") else self._base(timeframe_minutes(timeframe))
         bars = self.history.get(symbol, []) if base == "1m" else self.series.get((symbol, base), [])
         key = (symbol, timeframe)
         version = (len(bars), bars[-1].time if bars else 0, int(now.timestamp())//60)
         cached = self.candle_cache.get(key)
         if cached and cached[0] == version:
             return cached[1]
-        candles = aggregate(bars, timeframe, now, symbol, timeframe_minutes(base))
+        candles = aggregate(bars, timeframe, now, "NIFTY 50" if symbol.startswith("CDS:") else symbol, timeframe_minutes(base))
         self.candle_cache[key] = (version, candles)
         return candles
 
     @staticmethod
     def _fetch(symbol, base, warm):
+        if symbol.startswith("CDS:"):
+            from app.services.history import fetch_history
+            from datetime import timedelta
+            end = datetime.now(IST)
+            start = end - timedelta(days=7 if warm else 1)
+            return fetch_history(symbol, "1m", start, end, start).candles
         from app.services.kite_backtest import fetch_historical_candles
         return fetch_historical_candles(symbol, base, days_back=(7 if base == "1m" else 59) if warm else 1)
 

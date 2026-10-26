@@ -1,4 +1,4 @@
-import { API_BASE_URL, WS_BASE_URL } from "@/config";
+import { API_BASE_URL, WS_BASE_URL } from "@/defaults";
 
 export const API_BASE = API_BASE_URL;
 export const WS_URL = WS_BASE_URL;
@@ -22,17 +22,20 @@ function describe(detail: unknown): string {
 export async function api<T = unknown>(
   method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
-  body?: unknown
+  body?: unknown,
+  options?: { signal?: AbortSignal }
 ): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
       method,
+      signal: options?.signal,
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  } catch {
-    throw new ApiError("Cannot reach the backend. Is it running on port 8001?");
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw error;
+    throw new ApiError("Cannot reach the backend. Is it running on port 8000?");
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(describe((data as { detail?: unknown }).detail));

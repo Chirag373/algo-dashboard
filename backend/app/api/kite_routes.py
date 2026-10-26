@@ -30,7 +30,7 @@ class BacktestIn(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     strategy_id: str = Field(min_length=1)
     days_back: int = Field(default=30, ge=1, le=3650, strict=True)
-    capital: float = Field(default=300000, gt=0, le=1e12)
+    capital: float | None = Field(default=None, gt=0, le=1e12)
     slippage_pct: float = Field(default=0.05, ge=0, le=5)
     fee_per_order: float | None = Field(default=None, ge=0, le=100000)
 
@@ -71,6 +71,7 @@ async def kite_set_token(body: TokenIn):
 def kite_status():
     """Check if Kite access token is valid by making a live API call."""
     import urllib.request
+    import urllib.error
     import json
     from app.services.kite_backtest import get_access_token
     from app.core.config import settings
@@ -90,11 +91,14 @@ def kite_status():
             data = json.loads(resp.read().decode())
             user_name = data.get("data", {}).get("user_name", "")
         return {"ok": True, "connected": True, "api_key": settings.KITE_API_KEY, "has_token": True, "user_name": user_name}
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            from app.services.kite_backtest import set_access_token
+            set_access_token("")
+            return {"ok": True, "connected": False, "has_token": False, "error": "Token expired or invalid"}
+        raise HTTPException(status_code=503, detail="Unable to verify Zerodha session. Retry shortly.") from None
     except Exception:
-        # Token is invalid/expired
-        from app.services.kite_backtest import set_access_token
-        set_access_token("")  # Clear bad token
-        return {"ok": True, "connected": False, "api_key": settings.KITE_API_KEY, "has_token": False, "error": "Token expired or invalid"}
+        raise HTTPException(status_code=503, detail="Unable to reach Zerodha. Your saved session has been retained.") from None
 
 
 @router.get("/candles")
@@ -131,3 +135,21 @@ async def kite_backtest(body: BacktestIn, request: Request):
     except Exception:
         logging.getLogger("backtest").exception("Historical backtest failed")
         raise HTTPException(status_code=502, detail="Historical backtest failed. Check provider availability and server logs; no trading state was changed.") from None
+
+
+@router.get("/option-chain")
+def option_chain(symbol: str = "NIFTY", expiry: str | None = None):
+    from app.services.option_chain import chain, ChainError
+    try:
+        return chain(symbol, expiry)
+    except ChainError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+
+
+@router.get("/option-underlyings")
+def option_underlyings():
+    from app.services.option_chain import underlyings, ChainError
+    try:
+        return underlyings()
+    except ChainError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None

@@ -27,8 +27,8 @@ import {
   Zap,
 } from "lucide-react";
 import { ExecutionLog } from "@/components/terminal/ExecutionLog";
-import { useTerminal } from "@/lib/terminal/store";
-import { inr, num, signed } from "@/lib/terminal/format";
+import { useTerminal } from "@/components/terminal/context";
+import { inr, num, signed } from "@/utils/format";
 
 export default function Strategies() {
   const t = useTerminal();
@@ -59,12 +59,13 @@ export default function Strategies() {
     };
   }, [menuAnchor]);
 
+  const todayTrades = t.closed.filter((trade) => trade.tradeDate === t.marketDate);
   const totalStrategies = t.strategies.length;
   const activeStrategies = t.strategies.filter((s) => s.status === "running").length;
 
   // Compute stats per strategy
   const strategiesWithStats = t.strategies.map((s) => {
-    const strTrades = t.closed.filter((c) => c.strategyId === s.id);
+    const strTrades = todayTrades.filter((c) => c.strategyId === s.id);
     const strPos = t.positions.filter((p) => p.strategyId === s.id);
     const realized = strTrades.reduce((acc, c) => acc + c.pnl, 0);
     const unrealized = strPos.reduce(
@@ -96,7 +97,7 @@ export default function Strategies() {
   let maxDrawdown = 0;
   let runningPnl = 0;
   let peakPnl = 0;
-  const sortedTrades = [...t.closed].reverse();
+  const sortedTrades = [...todayTrades].reverse();
   for (const tr of sortedTrades) {
     runningPnl += tr.pnl;
     if (runningPnl > peakPnl) peakPnl = runningPnl;
@@ -111,7 +112,7 @@ export default function Strategies() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Strategies</h1>
           <p className="text-[13px] text-slate-500 mt-1">
-            Create, manage and deploy your algo strategies.
+            Today’s strategy activity · {t.marketDate}. Earlier trades are available in History.
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -296,8 +297,10 @@ export default function Strategies() {
               )}
               {strategiesWithStats.map((row) => {
                 const livePositions = t.positions.filter((p) => p.strategyId === row.id);
-                const closedTrades = t.closed.filter((c) => c.strategyId === row.id);
-                const strategyOrders = t.orders.filter((o) => o.strategyId === row.id);
+                const closedTrades = todayTrades.filter((c) => c.strategyId === row.id);
+                const strategyOrders = t.orders.filter(
+                  (o) => o.strategyId === row.id && o.tradeDate === t.marketDate
+                );
                 const isExpanded = expandedId === row.id;
                 const currentTab =
                   detailsTab[row.id] || (livePositions.length > 0 ? "live" : "closed");
@@ -338,7 +341,7 @@ export default function Strategies() {
                       </td>
                       <td className="py-4 px-4">
                         <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded text-[11px] font-semibold">
-                          {row.instrument}
+                          {row.instruments?.join(", ") || row.instrument}
                         </span>
                       </td>
                       <td className="py-4 px-4 text-center">
@@ -349,7 +352,9 @@ export default function Strategies() {
                         ${row.template === "Custom" ? "bg-blue-50 text-blue-600" : ""}
                       `}
                         >
-                          {row.template}
+                          {row.params.executionAction === "forward_put"
+                            ? "Forward Put Builder"
+                            : row.template}
                         </span>
                       </td>
                       <td className="py-4 px-4">
@@ -543,7 +548,7 @@ export default function Strategies() {
                                   }`}
                                 >
                                   <History className="w-3.5 h-3.5" />
-                                  Executed Trades & Outcomes ({closedTrades.length})
+                                  Today’s Trades & Outcomes ({closedTrades.length})
                                 </button>
                                 <button
                                   onClick={() =>
@@ -556,7 +561,7 @@ export default function Strategies() {
                                   }`}
                                 >
                                   <ListChecks className="w-3.5 h-3.5" />
-                                  Orders Log ({strategyOrders.length})
+                                  Today’s Orders ({strategyOrders.length})
                                 </button>
                               </div>
 

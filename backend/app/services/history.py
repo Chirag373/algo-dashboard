@@ -72,11 +72,17 @@ def _request(url: str, headers=None, kite=False) -> bytes:
 
 
 def _kite_token(symbol, headers):
+    if symbol.startswith("CDS:"):
+        parts = symbol.split(":")
+        if len(parts) != 3 or not parts[1].startswith("USDINR") or not parts[1].endswith("FUT") or not parts[2].isdigit():
+            raise HistoryError("Invalid saved USDINR reference contract.")
+        return int(parts[2])
     if symbol in NIFTY_INSTRUMENTS and "FUT" not in symbol:
         return NIFTY_INSTRUMENTS[symbol]["token"]
     if symbol.endswith(" FUT"):
         raise HistoryError("Select an exact futures contract; an index price cannot substitute for a futures instrument.")
-    exchange = "BSE" if symbol == "SENSEX" else "NSE"
+    exchange = "BSE" if symbol == "SENSEX" or symbol.endswith(".BO") else "NSE"
+    lookup_symbol = symbol[:-3] if symbol.endswith(".BO") else symbol
     today = datetime.now(IST).date().isoformat()
     key = (exchange, today)
     if key not in _INSTRUMENT_CACHE:
@@ -84,7 +90,7 @@ def _kite_token(symbol, headers):
         rows = csv.DictReader(io.StringIO(body.decode()))
         _INSTRUMENT_CACHE[key] = {r["tradingsymbol"]: int(r["instrument_token"]) for r in rows}
     aliases = {"FINNIFTY":"NIFTY FIN SERVICE", "BANKNIFTY":"NIFTY BANK", "NIFTY":"NIFTY 50"}
-    token = _INSTRUMENT_CACHE[key].get(aliases.get(symbol,symbol))
+    token = _INSTRUMENT_CACHE[key].get(aliases.get(lookup_symbol,lookup_symbol))
     if token is None:
         raise InstrumentUnavailable(f"Kite instrument master does not contain {exchange}:{symbol}. No substitute instrument was used.")
     return token
@@ -122,6 +128,9 @@ def fetch_history(symbol: str, timeframe: str, start: datetime, end: datetime,
             cursor = stop
         return HistoricalData(_clean(candles,warmup_start,end),"Zerodha Kite Connect",1)
 
+    if symbol.startswith("CDS:"):
+        raise HistoryError("Connect Zerodha to load the saved USDINR futures history. No spot or substitute contract was used.")
+
     # Explicit public-provider fallback; its intraday retention is never extended
     # using generated candles or silently changing the requested timeframe.
     interval, base = source_interval(minutes)
@@ -133,7 +142,7 @@ def fetch_history(symbol: str, timeframe: str, start: datetime, end: datetime,
     if warmup_start < oldest:
         warmup_start = oldest
         warnings.append("Provider retention limited warmup history; conditions remain unavailable until sufficiently warmed up.")
-    mapping = {"NIFTY":"^NSEI","NIFTY 50":"^NSEI","BANKNIFTY":"^NSEBANK","NIFTY BANK":"^NSEBANK","SENSEX":"^BSESN"}
+    mapping = {"INDIA VIX":"^INDIAVIX","NIFTY":"^NSEI","NIFTY 50":"^NSEI","BANKNIFTY":"^NSEBANK","NIFTY BANK":"^NSEBANK","SENSEX":"^BSESN"}
     target = mapping.get(symbol,symbol)
     if symbol.endswith(" FUT"):
         raise HistoryError("Select an exact contract and connect its historical provider. Index candles cannot substitute for futures.")

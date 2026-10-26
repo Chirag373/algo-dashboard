@@ -10,8 +10,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api } from "@/lib/terminal/api";
-import { num, pnlColor } from "@/lib/terminal/format";
+import { api } from "@/utils/api";
+import { num, pnlColor } from "@/utils/format";
 import { Panel } from "./ui";
 
 type Period = "1D" | "1W" | "1M" | "3M";

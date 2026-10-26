@@ -34,7 +34,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     // Connect to FastAPI WebSocket using environment variable (fallback to localhost)
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8001/ws/market-data";
+    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://127.0.0.1:8000/ws/market-data";
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {

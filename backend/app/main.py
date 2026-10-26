@@ -14,6 +14,7 @@ from app.services.broker import PaperBroker
 from app.services.engine import TradingEngine
 from app.services.feed import build_feed
 from app.services.hub import Hub
+from app.services.forward_put import ForwardPutMarket
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("app")
@@ -25,11 +26,13 @@ async def run_loop(engine: TradingEngine, hub: Hub) -> None:
         await asyncio.sleep(1)
         try:
             if hasattr(engine.feed, "set_symbols"):
-                symbols = {p["symbol"] for p in engine.positions} | {o["symbol"] for o in engine.pending}
+                symbols = {p["symbol"] for p in engine.positions if p.get("executionAction") != "forward_put"} | {o["symbol"] for o in engine.pending}
                 for strategy in engine.strategies:
                     if strategy["status"] in {"running", "paused"}:
-                        symbols.update(engine._universe(strategy["instrument"]))
+                        symbols.update(engine._universe(strategy["instrument"], strategy.get("instruments")))
                 engine.feed.set_symbols(symbols, engine.strategies)
+            if engine.option_market:
+                engine.option_market.poll(engine.strategies, engine.positions)
             engine.on_tick(engine.feed.next())
             await hub.broadcast({"type": "snapshot", "data": engine.snapshot()})
         except asyncio.CancelledError:
@@ -45,6 +48,7 @@ async def lifespan(app: FastAPI):
         settings.FEED, settings.SIM_MINUTES_PER_TICK, settings.SIM_DAY_PAUSE_SECONDS, settings.SIM_SEED
     )
     engine = TradingEngine(db, feed, PaperBroker(settings.PAPER_FEE_PER_ORDER), settings.LIVE_ENABLED)
+    engine.option_market = ForwardPutMarket()
     hub = Hub()
     app.state.engine, app.state.hub = engine, hub
     task = asyncio.create_task(run_loop(engine, hub))
@@ -58,6 +62,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         engine.save()
+        engine.option_market.close()
         if hasattr(feed, "close"):
             feed.close()
 

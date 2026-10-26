@@ -61,9 +61,16 @@ async def get_analytics(request: Request, strategy_id: str | None = None,
     capital = float(engine.risk["totalCapital"])
     result = performance(rows, capital)
     names = {s["id"]: s["name"] for s in engine.strategies}
+    grouped = {}
+    for trade in rows:
+        sid = trade.get("strategyId") or ""
+        group = grouped.setdefault(sid, {"strategyId": sid, "name": names.get(sid, "Manual trades" if sid in {"", "manual"} else "Removed strategy"), "trades": 0, "wins": 0, "pnl": 0})
+        group["trades"] += 1
+        group["wins"] += int(trade["pnl"] > 0)
+        group["pnl"] = round(group["pnl"] + trade["pnl"], 2)
     options = engine.db.strategy_stats(engine.market_date)
     strategy_ids = dict.fromkeys([*names, *options])
-    return {**result, "capital": capital, "dateFrom": date_from.isoformat() if date_from else None,
+    return {**result, "strategyBreakdown": list(grouped.values()), "capital": capital, "dateFrom": date_from.isoformat() if date_from else None,
             "dateTo": end.isoformat(), "page": page, "pageSize": page_size,
             "totalTrades": len(rows), "totalPages": (len(rows) + page_size - 1) // page_size,
             "strategies": [{"id": sid, "name": names.get(sid, "Manual trades" if sid in {"", "manual"} else f"Removed strategy ({sid})")} for sid in strategy_ids],
@@ -128,12 +135,13 @@ INDIAN_ASSETS = [
 
 
 @router.get("/history/{symbol}")
-def get_history(symbol: str, request: Request, timeframe: str = "5m", limit: int = 100):
+def get_history(symbol: str, request: Request, timeframe: str = "5m", limit: int = Query(500000, ge=1, le=500000), days_back: int = Query(36525, ge=1, le=36525)):
     # Try real live/historical exchange candles first (Nifty, Bank Nifty, Indian stocks)
     try:
         from app.services.kite_backtest import fetch_historical_candles
-        days_back = 30 if "d" in timeframe.lower() else (14 if "h" in timeframe.lower() else 5)
-        candles = fetch_historical_candles(symbol, timeframe, days_back)
+        from app.services.chart_history import aggregate_chart
+        source_timeframe = "1d" if timeframe in {"1M", "1Y", "5Y"} else "1h" if timeframe == "4h" else timeframe
+        candles = aggregate_chart(fetch_historical_candles(symbol, source_timeframe, days_back), timeframe, symbol)
         if candles:
             return {
                 "ok": True,
@@ -151,6 +159,9 @@ def get_history(symbol: str, request: Request, timeframe: str = "5m", limit: int
             }
     except Exception:
         pass
+
+    if timeframe in {"4h", "1M", "1Y", "5Y"}:
+        raise HTTPException(status_code=503, detail="Historical candles for this timeframe are unavailable. Please retry.")
 
     e = _engine(request)
     if hasattr(e.feed, "history") and symbol in e.feed.history:
@@ -222,50 +233,16 @@ def get_history(symbol: str, request: Request, timeframe: str = "5m", limit: int
 _CACHED_ASSETS = []
 
 @router.get("/assets")
-def get_assets(q: str = "", limit: int = 100):
-    """Return searchable stock assets prioritizing Indian Nifty 50 and global equities."""
-    global _CACHED_ASSETS
-    from app.core.config import settings
-    import urllib.request
-    import json
-
-    if not _CACHED_ASSETS:
-        # Seed with Indian assets
-        all_assets = list(INDIAN_ASSETS)
-        try:
-            req_obj = urllib.request.Request(
-                f"{settings.ALPACA_PAPER_URL}/assets?status=active&asset_class=us_equity",
-                headers={
-                    "APCA-API-KEY-ID": settings.ALPACA_KEY_ID,
-                    "APCA-API-SECRET-KEY": settings.ALPACA_SECRET_KEY,
-                }
-            )
-            with urllib.request.urlopen(req_obj, timeout=10) as resp:
-                raw = json.loads(resp.read().decode())
-                us_assets = [
-                    {
-                        "symbol": item["symbol"],
-                        "name": item["name"],
-                        "exchange": item.get("exchange", "NASDAQ"),
-                        "tradable": item.get("tradable", True),
-                    }
-                    for item in raw
-                    if item.get("tradable") and item.get("status") == "active"
-                ]
-                all_assets.extend(us_assets)
-        except Exception:
-            pass
-        _CACHED_ASSETS = all_assets
-
-    q_lower = q.lower().strip()
-    if not q_lower:
-        return {"ok": True, "assets": _CACHED_ASSETS[:limit], "total": len(_CACHED_ASSETS)}
-
-    filtered = [
-        a for a in _CACHED_ASSETS
-        if q_lower in a["symbol"].lower() or q_lower in a["name"].lower()
-    ]
-    return {"ok": True, "assets": filtered[:limit], "total": len(_CACHED_ASSETS)}
+def get_assets(q: str = "", limit: int = Query(20000, ge=1, le=30000)):
+    from app.services.indian_assets import assets
+    from app.services.option_chain import ChainError
+    try:
+        records = {a["symbol"]: a for a in assets()}
+    except ChainError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
+    query = q.lower().strip()
+    matches = [a for a in records.values() if not query or query in a["symbol"].lower() or query in a["name"].lower()]
+    return {"ok": True, "assets": matches[:limit], "total": len(matches)}
 
 
 @router.get("/quote/{symbol}")

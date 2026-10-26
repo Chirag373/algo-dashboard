@@ -1,30 +1,27 @@
 "use client";
 
+import { useState } from "react";
+import { Select } from "@/components/terminal/ui";
 import { Download } from "lucide-react";
 
 export default function FinbabaAnalytics() {
+  const [strategy, setStrategy] = useState("All Strategies");
   return (
     <div className="p-6 max-w-[1800px] mx-auto space-y-6">
       {/* Filter Panel */}
       <div className="bg-fin-panel border border-gray-800 rounded-lg p-4 flex flex-wrap items-center justify-between shadow-md">
         <div className="flex flex-wrap items-center gap-4">
-          <select className="bg-[#1a1a1a] text-gray-200 px-3 py-2 rounded border border-gray-700 outline-none focus:border-green-500 text-sm">
-            <option>All Strategies</option>
-            <optgroup label="Nifty">
-              <option>C1 — Nifty</option>
-              <option>C2 — Nifty</option>
-              <option>C3 — Nifty</option>
-              <option>C4 — Nifty</option>
-              <option>C5 — Nifty</option>
-            </optgroup>
-            <optgroup label="BankNifty">
-              <option>B1 — BankNifty</option>
-              <option>B2 — BankNifty</option>
-              <option>B3 — BankNifty</option>
-              <option>B4 — BankNifty</option>
-              <option>B5 — BankNifty</option>
-            </optgroup>
-          </select>
+          <Select
+            aria-label="Strategy"
+            value={strategy}
+            onChange={setStrategy}
+            className="min-w-52"
+            options={[
+              "All Strategies",
+              ...[1, 2, 3, 4, 5].map((i) => `C${i} — Nifty`),
+              ...[1, 2, 3, 4, 5].map((i) => `B${i} — BankNifty`),
+            ].map((value) => ({ value, label: value }))}
+          />
           <input
             type="date"
             className="bg-[#1a1a1a] text-gray-200 px-3 py-2 rounded border border-gray-700 outline-none focus:border-green-500 text-sm"

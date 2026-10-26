@@ -3,8 +3,9 @@
 import { Fragment, useState } from "react";
 import Link from "next/link";
 import { TrendingUp, Wallet, List, Trophy, ShieldCheck, ChevronDown } from "lucide-react";
-import { useTerminal, pnlOf, type Result } from "@/lib/terminal/store";
-import { inr, num, pnlColor, signed } from "@/lib/terminal/format";
+import { Select } from "@/components/terminal/ui";
+import { useTerminal, pnlOf, type Result } from "@/components/terminal/context";
+import { inr, num, pnlColor, signed } from "@/utils/format";
 import { Badge, Empty, Panel, Stat, td, tdr, th, thr, btn } from "@/components/terminal";
 import { NiftyChart } from "@/components/terminal/NiftyChart";
 import { ExecutionLog } from "@/components/terminal/ExecutionLog";
@@ -140,19 +141,17 @@ export default function Overview() {
       <div className="flex justify-end">
         <label className="text-xs text-slate-500 flex items-center gap-2">
           Positions & trade history
-          <select
+          <Select
             aria-label="Filter positions and trades by strategy"
             value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            className="bg-white border border-slate-200 rounded-lg p-2 text-slate-800 max-w-60"
-          >
-            <option value="all">All strategies & manual trades</option>
-            {t.strategies.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
+            onChange={setSelected}
+            size="sm"
+            className="w-60"
+            options={[
+              { value: "all", label: "All strategies & manual trades" },
+              ...t.strategies.map((s) => ({ value: s.id, label: s.name })),
+            ]}
+          />
         </label>
       </div>
       <div className={styles.positionsGrid}>

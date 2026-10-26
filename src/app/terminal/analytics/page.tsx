@@ -1,19 +1,19 @@
 "use client";
 
+import Link from "next/link";
+import { Select } from "@/components/terminal/ui";
 import { useEffect, useState } from "react";
-import { useTerminal } from "@/lib/terminal/store";
-import { api } from "@/lib/terminal/api";
-import type { AnalyticsResult } from "@/lib/terminal/analytics";
+import { useTerminal } from "@/components/terminal/context";
+import { api } from "@/utils/api";
+import type { AnalyticsResult } from "@/utils/analytics";
 import PerformanceView from "@/components/terminal/PerformanceView";
-import { Badge, Empty, Panel, btn, td, tdr, th, thr } from "@/components/terminal";
-import { inr, num, pnlColor, signed } from "@/lib/terminal/format";
+import { Empty, Panel, btn } from "@/components/terminal";
 
 export default function Analytics() {
   const t = useTerminal();
   const [sel, setSel] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [page, setPage] = useState(1);
   const [retry, setRetry] = useState(0);
   const [response, setResponse] = useState<{
     key: string;
@@ -23,7 +23,7 @@ export default function Analytics() {
   const [error, setError] = useState<{ key: string; message: string } | null>(null);
   const [updating, setUpdating] = useState(false);
   const [options, setOptions] = useState<{ id: string; name: string }[]>([]);
-  const params = new URLSearchParams({ page: String(page) });
+  const params = new URLSearchParams();
   if (sel !== "all") params.set("strategy_id", sel);
   if (from) params.set("date_from", from);
   if (to || t.marketDate) params.set("date_to", to || t.marketDate);
@@ -100,22 +100,22 @@ export default function Analytics() {
         <div className="p-4 flex flex-wrap items-end gap-4">
           <label className="flex flex-col gap-1.5 text-xs text-slate-500">
             Strategy
-            <select
+            <Select
               aria-label="Analytics strategy"
               value={sel}
-              onChange={(e) => {
-                setSel(e.target.value);
-                setPage(1);
+              onChange={(value) => {
+                setSel(value);
               }}
-              className={filterClass}
-            >
-              <option value="all">All strategies & manual trades</option>
-              {(options.length ? options : t.strategies).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              className="min-w-64"
+              size="sm"
+              options={[
+                { value: "all", label: "All strategies & manual trades" },
+                ...(options.length ? options : t.strategies).map((s) => ({
+                  value: s.id,
+                  label: s.name,
+                })),
+              ]}
+            />
           </label>
           <label className="flex flex-col gap-1.5 text-xs text-slate-500">
             From
@@ -125,7 +125,6 @@ export default function Analytics() {
               value={from}
               onChange={(e) => {
                 setFrom(e.target.value);
-                setPage(1);
               }}
               className={filterClass}
             />
@@ -138,7 +137,6 @@ export default function Analytics() {
               value={to || t.marketDate}
               onChange={(e) => {
                 setTo(e.target.value);
-                setPage(1);
               }}
               className={filterClass}
             />
@@ -149,7 +147,6 @@ export default function Analytics() {
               setSel("all");
               setFrom("");
               setTo("");
-              setPage(1);
             }}
           >
             Reset filters
@@ -173,23 +170,14 @@ export default function Analytics() {
       )}
       {data && (
         <>
-          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-slate-600 space-y-1">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
             <p>
-              <strong>{data.totalTrades} closed trades</strong> ·{" "}
-              {data.dateFrom ?? "First saved trade"} through {data.dateTo} (inclusive, exchange
-              trade dates) · Configured capital {inr(data.capital)}.
+              {data.dateFrom ?? "All saved trades"} through {data.dateTo} · Closed trades, after
+              fees
             </p>
-            <p>
-              Realized P&L only; open positions are excluded. Saved history may include earlier
-              simulated paper runs. Equity starts at the current configured capital; capital changes
-              are not tracked.
-            </p>
-            <p>
-              Max drawdown uses closed-trade equity observations; charts show daily closing equity.
-              Sharpe uses days with closed trades, sample standard deviation, zero risk-free rate
-              and √252 annualization. It does not include unobserved sessions or intraday unrealized
-              drawdowns.
-            </p>
+            <Link href="/terminal/history" className="font-semibold text-blue-600 hover:underline">
+              View trade history →
+            </Link>
           </div>
           {data.totalTrades ? (
             <PerformanceView result={data} />
@@ -198,88 +186,6 @@ export default function Analytics() {
               <Empty text="No closed trades match these filters. Select another strategy or date range; analytics populate when positions close." />
             </Panel>
           )}
-          <Panel
-            title={`Closed trade history (${data.totalTrades})`}
-            right={
-              <span className="text-xs text-slate-500">
-                Recorded fees: {inr(data.metrics.fees, 2)}
-              </span>
-            }
-          >
-            {!data.trades.length ? (
-              <Empty text="No trades on this page." />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-slate-50">
-                    <tr>
-                      {[
-                        "Closed (IST)",
-                        "Symbol / strategy",
-                        "Side",
-                        "Qty",
-                        "Entry",
-                        "Exit",
-                        "Fees",
-                        "Net P&L",
-                        "Reason",
-                      ].map((label, i) => (
-                        <th key={label} className={i < 3 || i === 8 ? th : thr}>
-                          {label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {data.trades.map((trade) => (
-                      <tr key={trade.id}>
-                        <td className={td}>
-                          {trade.tradeDate} {trade.closedAt}
-                        </td>
-                        <td className={td}>
-                          <strong>{trade.symbol}</strong>
-                          <span className="block text-[11px] text-slate-400 mt-1">
-                            {trade.strategyName}
-                          </span>
-                        </td>
-                        <td className={td}>
-                          <Badge tone={trade.side === "BUY" ? "green" : "red"}>{trade.side}</Badge>
-                        </td>
-                        <td className={tdr}>{trade.qty}</td>
-                        <td className={tdr}>{num(trade.entry)}</td>
-                        <td className={tdr}>{num(trade.exit)}</td>
-                        <td className={tdr}>{inr(trade.fees, 2)}</td>
-                        <td className={`${tdr} ${pnlColor(trade.pnl)}`}>{signed(trade.pnl, 2)}</td>
-                        <td className={td}>{trade.reason}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div className="p-4 flex items-center justify-between text-xs text-slate-500">
-              <span>
-                Page {data.totalPages ? data.page : 0} of {data.totalPages} · Totals and charts
-                include every matching trade.
-              </span>
-              <div className="flex gap-2">
-                <button
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => p - 1)}
-                  className={`${btn} bg-slate-100`}
-                >
-                  Previous
-                </button>
-                <button
-                  disabled={page >= data.totalPages}
-                  onClick={() => setPage((p) => p + 1)}
-                  className={`${btn} bg-slate-100`}
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </Panel>
         </>
       )}
     </div>

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 from app.schemas import StrategyIn
 from app.services.candles import aggregate, timeframe_minutes
-from app.services.conditions import evaluate, parse_operand
+from app.services.conditions import evaluate, parse_operand, uses_vix, attach_vix, uses_usdinr, attach_usdinr
 from app.services.history import HistoryError, InstrumentUnavailable, fetch_history, market_timezone
 from app.services.engine import TradingEngine
 
@@ -21,13 +21,15 @@ def _money(value):
     return round(value, 2)
 
 
-def run_saved_backtest(strategy: dict, days_back: int, capital: float, slippage_pct: float,
+def run_saved_backtest(strategy: dict, days_back: int, capital: float | None, slippage_pct: float,
                        fee_per_order: float, *, now=None, loader=fetch_history) -> dict:
     saved = copy.deepcopy(strategy)
     validated = StrategyIn.model_validate(saved).model_dump()
     saved.update(validated)
     if saved["template"] not in {"Custom", "ORB"}:
         raise HistoryError(f"{saved['template']} has no historical execution model. No substitute strategy was tested.")
+    if saved["params"].get("executionAction") == "forward_put":
+        raise HistoryError("Forward Put Builder historical backtesting is unavailable: historical option-chain selection and bid/ask quotes are required. No underlying-stock substitute was tested.")
     market = saved["params"].get("market", "IN")
     tz = market_timezone(saved["instrument"],market)
     end = (now or datetime.now(tz)).astimezone(tz).replace(hour=0,minute=0,second=0,microsecond=0)
@@ -36,7 +38,7 @@ def run_saved_backtest(strategy: dict, days_back: int, capital: float, slippage_
     periods = [int(parse_operand(r[k])[1]) for r in saved.get("entryRules",[])+saved.get("exitRules",[]) for k in ["indicator","value"] if parse_operand(r[k])[0] in {"EMA","SMA","RSI","SUPERTREND"}]
     warm_days = min(730, max(10, math.ceil((max(periods,default=1)+2)*tf/375*7/5)+10))
     warm_start = start-timedelta(days=warm_days)
-    symbols = TradingEngine._universe(saved["instrument"])
+    symbols = TradingEngine._universe(saved["instrument"], saved.get("instruments"))
     datasets, coverage, warnings = {}, [], []
     excluded = []
     event_heap = []
@@ -44,6 +46,28 @@ def run_saved_backtest(strategy: dict, days_back: int, capital: float, slippage_
     unavailable = 0
     gaps = 0
     total_source = 0
+    vix_bars = []
+    needs_vix = uses_vix(saved)
+    if needs_vix:
+        vix_data = loader("INDIA VIX", saved["timeframe"], start, end, warm_start, market="IN")
+        vix_bars = aggregate(vix_data.candles, saved["timeframe"], end, "INDIA VIX", vix_data.source_minutes, market="IN", keep_segments=True)
+        warnings.extend(f"India VIX: {warning}" for warning in vix_data.warnings)
+        if not vix_bars:
+            raise HistoryError("India VIX history is unavailable for this period and timeframe.")
+        warnings.append("VIX conditions use India VIX OHLCV and indicators from exactly matching completed candles. Missing VIX candles cannot satisfy a required condition.")
+    usd_bars = []
+    needs_usd = uses_usdinr(saved)
+    if needs_usd:
+        from app.services.currency_reference import reference_key
+        key = reference_key(saved)
+        if not key:
+            raise HistoryError("Save the strategy while connected to Zerodha to select its USDINR futures reference contract.")
+        usd_data = loader(key, "1m", start, end, warm_start, market="IN")
+        usd_bars = aggregate(usd_data.candles, saved["timeframe"], end, "NIFTY 50", usd_data.source_minutes, market="IN", keep_segments=True)
+        if not usd_bars:
+            raise HistoryError("No historical candles for the strategy's saved USDINR futures contract. Select a period covered by that contract.")
+        warnings.extend(f"USDINR: {warning}" for warning in usd_data.warnings)
+        warnings.append(f"USDINR conditions reference saved futures {saved['params']['usdinrSymbol']} (expiry {saved['params']['usdinrExpiry']}), not spot FX. Only exactly matching completed candles are used; older or missing reference data cannot satisfy a required condition. No rolling contract is fabricated.")
     for symbol in symbols:
         try:
             data = loader(symbol,saved["timeframe"],start,end,warm_start,market=market)
@@ -55,6 +79,10 @@ def run_saved_backtest(strategy: dict, days_back: int, capital: float, slippage_
         warnings.extend(f"{symbol}: {w}" for w in data.warnings)
         source = aggregate(data.candles,f"{data.source_minutes}m",end,symbol,data.source_minutes,keep_segments=True,market=market)
         selected = aggregate(data.candles,saved["timeframe"],end,symbol,data.source_minutes,keep_segments=True,market=market)
+        if needs_vix:
+            selected = attach_vix(selected, vix_bars)
+        if needs_usd:
+            selected = attach_usdinr(selected, usd_bars)
         replay = [b for b in source if start.timestamp() <= b["time"] < end.timestamp()]
         if not replay:
             message = f"No historical candles for {symbol} during {start.date()} to {(end-timedelta(days=1)).date()}. The range may contain holidays, lack provider coverage, or require data permissions."
@@ -112,7 +140,7 @@ def run_saved_backtest(strategy: dict, days_back: int, capital: float, slippage_
     p = saved["params"]
     cutoff = p.get("squareOffTime","15:15")
     slip = slippage_pct/100
-    cash = float(capital)
+    cash = float(capital or 0)
     positions, pending, marks, latches, orb = {}, {}, {}, {}, {}
     trades, curve = [], []
     rejected = 0
@@ -127,14 +155,14 @@ def run_saved_backtest(strategy: dict, days_back: int, capital: float, slippage_
     def equity():
         return cash+sum((marks.get(sym,pos["entry"])-pos["entry"])*pos["sign"]*pos["qty"] for sym,pos in positions.items())
 
-    peak = float(capital)
+    peak = float(capital or 0)
     max_dd, max_dd_pct = 0.0, 0.0
     def point(ts):
         nonlocal peak, max_dd, max_dd_pct
         value = _money(equity())
         peak = max(peak,value)
         dd = peak-value
-        dd_pct = dd/peak*100 if peak>0 else 0
+        dd_pct = dd/peak*100 if capital is not None and peak>0 else 0
         max_dd = max(max_dd,dd)
         max_dd_pct = max(max_dd_pct,dd_pct)
         item = dict(time=iso(ts),date=datetime.fromtimestamp(ts,tz).date().isoformat(),equity=value,drawdown=-dd_pct)
@@ -174,7 +202,7 @@ def run_saved_backtest(strategy: dict, days_back: int, capital: float, slippage_
                 qty = order["qty"]
                 margin = .1 if symbol in {"NIFTY 50","BANKNIFTY","FINNIFTY","SENSEX"} else 1.0
                 used = sum(pos["entry"]*pos["qty"]*pos["margin"] for pos in positions.values())
-                if fill*qty*margin+fee_per_order > equity()-used:
+                if capital is not None and fill*qty*margin+fee_per_order > equity()-used:
                     rejected += 1
                 else:
                     cash = _money(cash-fee_per_order)
@@ -258,18 +286,18 @@ def build_result(strategy,start,end,capital,trades,curve,coverage,warnings,max_d
     for item in curve:
         daily[item["date"]] = item["equity"]
     sessions = sorted({d for c in coverage for d in c["sessions"]})
-    day_results, previous = [], float(capital)
+    day_results, previous = [], float(capital or 0)
     for day in sessions:
         value = daily.get(day,previous)
         closed = [t for t in trades if t["exitTime"][:10]==day]
-        day_results.append(dict(date=day,equity=value,pnl=_money(value-previous),trades=len(closed),wins=sum(t["pnl"]>0 for t in closed),returnPct=(value/previous-1)*100 if previous>0 else None))
+        day_results.append(dict(date=day,equity=value,pnl=_money(value-previous),trades=len(closed),wins=sum(t["pnl"]>0 for t in closed),returnPct=(value/previous-1)*100 if capital is not None and previous>0 else None))
         previous = value
     monthly = []
     for month in sorted({d["date"][:7] for d in day_results}):
         rows = [d for d in day_results if d["date"].startswith(month)]
         opening = rows[0]["equity"]-rows[0]["pnl"]
         pnl = _money(sum(r["pnl"] for r in rows))
-        monthly.append(dict(month=month,pnl=pnl,returnPct=pnl/opening*100 if opening>0 else None,trades=sum(r["trades"] for r in rows),wins=sum(r["wins"] for r in rows)))
+        monthly.append(dict(month=month,pnl=pnl,returnPct=pnl/opening*100 if capital is not None and opening>0 else None,trades=sum(r["trades"] for r in rows),wins=sum(r["wins"] for r in rows)))
     total = _money(sum(t["pnl"] for t in trades))
     profit = sum(max(0,t["pnl"]) for t in trades)
     loss = abs(sum(min(0,t["pnl"]) for t in trades))
@@ -278,13 +306,13 @@ def build_result(strategy,start,end,capital,trades,curve,coverage,warnings,max_d
     if len(returns)>=2 and statistics.stdev(returns)>0:
         sharpe = statistics.mean(returns)/statistics.stdev(returns)*math.sqrt(252)
     wins = sum(t["pnl"]>0 for t in trades)
-    return dict(ok=True,strategy={k:strategy[k] for k in ["id","name","version","template","instrument","timeframe","params","entryRules","exitRules"] if k in strategy},
+    return dict(ok=True,strategy={k:strategy[k] for k in ["id","name","version","template","instrument","instruments","timeframe","params","entryRules","exitRules"] if k in strategy},
         period=dict(requestedStart=start.isoformat(),requestedEndExclusive=end.isoformat(),calendarDays=(end-start).days,
             actualStart=min(c["firstCandle"] for c in coverage),actualEnd=max(c["lastCandle"] for c in coverage),timezone=str(start.tzinfo)),
         coverage=coverage,warnings=list(dict.fromkeys(warnings)),trades=sorted(trades,key=lambda t:(t["exitTime"],t["id"])),
         curve=curve,dayResults=day_results,monthlyReturns=monthly,
         summary=dict(totalPnl=total,totalTrades=len(trades),totalWins=wins,winRate=wins/len(trades)*100 if trades else 0,
-            returnPct=total/capital*100,portfolioValue=_money(capital+total),initialCapital=capital,
+            returnPct=total/capital*100 if capital else None,portfolioValue=_money(capital+total) if capital else None,initialCapital=capital,
             profitFactor=profit/loss if loss else None,profitFactorInfinite=bool(profit and not loss),grossProfit=_money(profit),grossLoss=_money(loss),
             maxDrawdown=_money(max_dd),maxDrawdownPct=max_dd_pct,sharpeRatio=sharpe,tradingDays=len(sessions),totalFees=_money(sum(t["fees"] for t in trades))),
-        assumptions=dict(entry="Next available source candle open after the signal candle closes",exits="Source OHLC; stop first if both stop and target touch; gap-aware fills; intrabar threshold exit times are reported at the source candle close",equity="Mark-to-market at source candle observations; final positions liquidated at last available close",slippagePct=slippage,feePerOrder=fee,sharpe="Daily session returns, sample standard deviation, annualized sqrt(252), risk-free rate 0; null if undefined",margin="Indices 10%, equities 100%; regular exchange cash sessions only"))
+        assumptions=dict(entry="Next available source candle open after the signal candle closes",exits="Source OHLC; stop first if both stop and target touch; gap-aware fills; intrabar threshold exit times are reported at the source candle close",equity="Mark-to-market at source candle observations; final positions liquidated at last available close",slippagePct=slippage,feePerOrder=fee,sharpe="Daily session returns, sample standard deviation, annualized sqrt(252), risk-free rate 0; null if undefined",margin="Saved strategy sizing without a capital limit" if capital is None else "Indices 10%, equities 100%; regular exchange cash sessions only"))

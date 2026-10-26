@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import Link from "next/link";
-import { useTerminal } from "@/lib/terminal/store";
-import { api } from "@/lib/terminal/api";
+import { useTerminal } from "@/components/terminal/context";
+import { api } from "@/utils/api";
 import { Select } from "@/components/terminal/ui";
-import { pnlColor } from "@/lib/terminal/format";
+import { pnlColor } from "@/utils/format";
 import type { Strategy } from "@/types";
 import {
   Play,
@@ -33,6 +32,12 @@ interface HistoricalTrade {
   reason: string;
 }
 interface BacktestResult {
+  summary: {
+    totalPnl: number;
+    totalTrades: number;
+    totalWins: number;
+    winRate: number;
+  };
   trades: HistoricalTrade[];
   strategy: Strategy;
   period: {
@@ -78,9 +83,8 @@ export default function Backtest() {
     t.strategies[0]?.id ??
     "";
   const [daysBack, setDaysBack] = useState(30);
-  const [capital, setCapital] = useState(300000);
-  const [slippage, setSlippage] = useState(0.05);
-  const [fee, setFee] = useState(20);
+  const [customDays, setCustomDays] = useState("");
+  const [customHorizon, setCustomHorizon] = useState(false);
   const [storedStatus, setStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [storedError, setError] = useState<string | null>(null);
   const [storedResult, setResult] = useState<BacktestResult | null>(null);
@@ -97,14 +101,7 @@ export default function Backtest() {
     () => t.strategies.find((s) => s.id === strategyId),
     [t.strategies, strategyId]
   );
-  const configKey = JSON.stringify([
-    strategyId,
-    selectedStrat?.version,
-    daysBack,
-    capital,
-    slippage,
-    fee,
-  ]);
+  const configKey = JSON.stringify([strategyId, selectedStrat?.version, daysBack]);
   const status = attemptKey === configKey ? storedStatus : "idle";
   const error = attemptKey === configKey ? storedError : null;
   const result = attemptKey === configKey ? storedResult : null;
@@ -156,19 +153,7 @@ export default function Backtest() {
       setTokenSaving(false);
     }
   };
-  const invalid =
-    !selectedStrat ||
-    !Number.isInteger(daysBack) ||
-    daysBack < 1 ||
-    daysBack > 3650 ||
-    !Number.isFinite(capital) ||
-    capital <= 0 ||
-    !Number.isFinite(slippage) ||
-    slippage < 0 ||
-    slippage > 5 ||
-    !Number.isFinite(fee) ||
-    fee < 0 ||
-    fee > 100000;
+  const invalid = !selectedStrat || !Number.isInteger(daysBack) || daysBack < 1 || daysBack > 3650;
   const handleRunBacktest = async () => {
     if (invalid) return;
     request.current?.abort();
@@ -187,9 +172,6 @@ export default function Backtest() {
         {
           strategy_id: strategyId,
           days_back: daysBack,
-          capital,
-          slippage_pct: slippage,
-          fee_per_order: fee,
         },
         { signal: controller.signal }
       );
@@ -351,7 +333,7 @@ export default function Backtest() {
                 t.strategies.length
                   ? t.strategies.map((s) => ({
                       value: s.id,
-                      label: `${s.name} (v${s.version}) — ${s.instrument} · ${s.timeframe}`,
+                      label: `${s.name} (v${s.version}) — ${s.instruments?.join(", ") || s.instrument} · ${s.timeframe}`,
                     }))
                   : [
                       {
@@ -365,132 +347,59 @@ export default function Backtest() {
 
           {/* Historical Test Horizon */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-bold text-slate-800 flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-slate-700" />
-                Historical Test Horizon
-              </label>
-              <div className="flex items-center gap-1 bg-slate-100/70 p-0.5 rounded-full">
-                {[15, 30, 60, 90].map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setDaysBack(d)}
-                    className={`px-3 py-0.5 rounded-full text-xs transition-all ${
-                      daysBack === d
-                        ? "bg-blue-600 text-white font-semibold shadow-2xs"
-                        : "text-slate-600 hover:text-slate-900 font-medium"
-                    }`}
-                  >
-                    {d}d
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
+            <label className="text-xs font-bold text-slate-800 flex items-center gap-2 mb-2">
+              <Calendar className="w-4 h-4 text-slate-700" />
+              Historical Test Horizon
+            </label>
+            <div
+              className="flex flex-wrap items-center gap-2"
+              role="group"
+              aria-label="Historical test horizon"
+            >
+              {[1, 3, 7, 15, 30, 60].map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  aria-pressed={!customHorizon && daysBack === d}
+                  onClick={() => {
+                    setCustomHorizon(false);
+                    setDaysBack(d);
+                  }}
+                  className={`h-10 w-16 rounded-xl border text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                    !customHorizon && daysBack === d
+                      ? "border-blue-600 bg-blue-600 text-white shadow-2xs"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-600"
+                  }`}
+                >
+                  {d}d
+                </button>
+              ))}
               <input
+                aria-label="Custom horizon in days"
                 type="number"
-                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm font-semibold text-slate-900 focus:outline-none focus:border-blue-500 shadow-2xs"
-                value={daysBack}
+                placeholder="Custom"
+                className={`h-10 w-16 appearance-none rounded-xl border px-1 text-center text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${
+                  customHorizon
+                    ? "border-blue-600 bg-blue-50 text-blue-700"
+                    : "border-slate-200 bg-white text-slate-600"
+                }`}
+                value={customDays}
                 min={1}
                 max={3650}
-                onChange={(e) => setDaysBack(Number(e.target.value))}
+                step={1}
+                onFocus={() => {
+                  setCustomHorizon(true);
+                  setDaysBack(Number(customDays));
+                }}
+                onChange={(e) => {
+                  setCustomDays(e.target.value);
+                  setCustomHorizon(true);
+                  setDaysBack(Number(e.target.value));
+                }}
               />
             </div>
           </div>
         </div>
-      </div>
-
-      <div className="bg-white rounded-2xl p-6 shadow-xs border border-slate-200 space-y-4">
-        {selectedStrat ? (
-          <>
-            <h3 className="text-sm font-bold">
-              Saved configuration · {selectedStrat.name} v{selectedStrat.version}
-            </h3>
-            <p className="text-xs text-slate-600">
-              {selectedStrat.instrument} · {selectedStrat.timeframe} · Quantity:{" "}
-              {String(selectedStrat.params.quantity ?? "Per-trade budget")} · Stop:{" "}
-              {String(
-                selectedStrat.params.stopLossPercent ?? selectedStrat.params.initialSlPercent
-              )}
-              % · Target:{" "}
-              {String(
-                selectedStrat.params.targetPercent ??
-                  Number(selectedStrat.params.initialSlPercent ?? 1) * 2
-              )}
-              %
-            </p>
-            <div className="text-xs text-slate-500 space-y-1">
-              {selectedStrat.entryRules?.map((r, i) => (
-                <p key={i}>
-                  {i ? (r.connector ?? "AND") : "IF"} {r.indicator} {r.operator} {r.value}
-                </p>
-              ))}
-              {selectedStrat.exitRules?.map((r, i) => (
-                <p key={i}>
-                  EXIT {i ? (r.connector ?? "AND") : "IF"} {r.indicator} {r.operator} {r.value}
-                </p>
-              ))}
-              {selectedStrat.template === "ORB" && (
-                <p>
-                  Opening range: {String(selectedStrat.params.rangeCandleCount)} candles · trailing
-                  stop uses saved settings.
-                </p>
-              )}
-              <p>
-                AND precedes OR. Instrument, timeframe and rules are read from the saved strategy on
-                the server.
-              </p>
-            </div>
-          </>
-        ) : (
-          <Link href="/terminal/strategies/new" className="text-blue-600 text-sm">
-            Create a strategy to backtest
-          </Link>
-        )}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-          <label className="space-y-2 font-semibold">
-            Initial test capital ({currency})
-            <input
-              aria-label="Initial test capital"
-              type="number"
-              min="1"
-              value={capital}
-              onChange={(e) => setCapital(Number(e.target.value))}
-              className="w-full border border-slate-200 rounded-xl px-4 py-2"
-            />
-          </label>
-          <label className="space-y-2 font-semibold">
-            Adverse slippage per fill (%)
-            <input
-              aria-label="Slippage percent"
-              type="number"
-              min="0"
-              max="5"
-              step="0.01"
-              value={slippage}
-              onChange={(e) => setSlippage(Number(e.target.value))}
-              className="w-full border border-slate-200 rounded-xl px-4 py-2"
-            />
-          </label>
-          <label className="space-y-2 font-semibold">
-            Fixed fee per order ({currency})
-            <input
-              aria-label="Fee per order"
-              type="number"
-              min="0"
-              step="0.01"
-              value={fee}
-              onChange={(e) => setFee(Number(e.target.value))}
-              className="w-full border border-slate-200 rounded-xl px-4 py-2"
-            />
-          </label>
-        </div>
-        <p className="text-xs text-slate-400">
-          Calendar days ending before today in the instrument’s exchange timezone. Costs are this
-          explicit model; exchange taxes and other charges are excluded. No live or paper positions
-          are changed.
-        </p>
       </div>
 
       {/* Error */}
@@ -570,6 +479,41 @@ export default function Backtest() {
             )}
           </div>
         )}
+        <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-6" aria-label="Backtest summary">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-5">
+            <p className="text-xs font-medium text-slate-500">Backtest P&amp;L</p>
+            <p
+              className={`mt-2 text-2xl font-bold tabular-nums ${result ? pnlColor(result.summary.totalPnl) : "text-slate-400"}`}
+            >
+              {result ? signed(result.summary.totalPnl) : "—"}
+            </p>
+            <p className="mt-1 text-xs text-slate-400">Net of order fees</p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-5">
+            <p className="text-xs font-medium text-slate-500">Number of trades</p>
+            <p
+              className={`mt-2 text-2xl font-bold tabular-nums ${result ? "text-slate-900" : "text-slate-400"}`}
+            >
+              {result ? result.summary.totalTrades.toLocaleString() : "—"}
+            </p>
+            <p className="mt-1 text-xs text-slate-400">Closed backtest trades</p>
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-5">
+            <p className="text-xs font-medium text-slate-500">Win rate</p>
+            <p
+              className={`mt-2 text-2xl font-bold tabular-nums ${result ? "text-blue-600" : "text-slate-400"}`}
+            >
+              {result && result.summary.totalTrades > 0
+                ? `${result.summary.winRate.toFixed(1)}%`
+                : "—"}
+            </p>
+            <p className="mt-1 text-xs text-slate-400">
+              {result
+                ? `${result.summary.totalWins} winning trades / ${result.summary.totalTrades} total`
+                : "Run a backtest to see results"}
+            </p>
+          </div>
+        </div>
         <h3 className="text-sm font-semibold text-slate-700 mb-3">
           Trade List{result ? ` (${trades.length})` : ""}
         </h3>
@@ -647,7 +591,7 @@ export default function Backtest() {
                   className="text-blue-600 font-semibold py-3"
                   onClick={() => setShowAllTrades(!showAllTrades)}
                 >
-                  {showAllTrades ? "Show first 15 trades" : `Show all ${trades.length} trades`}
+                  {showAllTrades ? "Show less" : "Show more"}
                 </button>
               )}
             </div>

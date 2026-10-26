@@ -28,6 +28,7 @@ export interface Strategy {
   name: string;
   template: StrategyTemplate;
   instrument: string;
+  instruments?: string[];
   timeframe: string;
   stage: StrategyStage;
   status: StrategyStatus;
@@ -65,6 +66,7 @@ export interface Position {
 }
 
 export interface Order {
+  tradeDate?: string;
   id: string;
   time: string;
   symbol: string;
